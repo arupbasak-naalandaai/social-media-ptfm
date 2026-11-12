@@ -9,6 +9,10 @@ export interface ShortcutHandlers {
   reply: () => void
   resolve: () => void
   ignore: () => void
+  /** Space: quick preview in the side sheet. */
+  preview?: () => void
+  /** Esc (when no sheet or dialog handles it), e.g. back to the list from the item page. */
+  escape?: () => void
 }
 
 function isTyping(target: EventTarget | null): boolean {
@@ -23,8 +27,9 @@ function overlayOpen(): boolean {
 }
 
 /**
- * Inbox shortcuts: j/k move, Enter/o open, r reply, e resolve, i ignore.
- * Esc is handled by the sheet itself. Ignored while typing or when a dialog/menu is open.
+ * Inbox shortcuts: j/k move, Enter/o open the full view, Space preview, r reply, e resolve,
+ * i ignore. Esc is handled by the sheet itself unless an `escape` handler is given.
+ * Ignored while typing or when a dialog/menu is open.
  */
 export function useInboxShortcuts(handlers: ShortcutHandlers, enabled = true) {
   const ref = useRef(handlers)
@@ -46,11 +51,17 @@ export function useInboxShortcuts(handlers: ShortcutHandlers, enabled = true) {
         r: h.reply,
         e: h.resolve,
         i: h.ignore,
+        " ": h.preview,
+        Escape: h.escape,
       }
       const fn = map[e.key]
       if (!fn) return
-      // Enter on a focused button/link should keep its native behaviour.
-      if (e.key === "Enter" && e.target instanceof HTMLElement && e.target.closest("button, a"))
+      // Enter/Space on a focused button/link should keep its native behaviour.
+      if (
+        (e.key === "Enter" || e.key === " ") &&
+        e.target instanceof HTMLElement &&
+        e.target.closest("button, a")
+      )
         return
       e.preventDefault()
       fn()

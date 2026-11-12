@@ -22,7 +22,9 @@ export function AppHeader() {
         orientation="vertical"
         className="mr-2 data-vertical:h-4 data-vertical:self-center"
       />
-      <h1 className="text-sm font-medium">{current?.title ?? "Social Inbox"}</h1>
+      <h1 className="text-sm font-medium">
+        {current?.title ?? (pathname.startsWith("/items/") ? "Item" : "Social Inbox")}
+      </h1>
       <div className="ml-auto flex items-center gap-2">
         <LiveDot />
         <Suspense fallback={null}>

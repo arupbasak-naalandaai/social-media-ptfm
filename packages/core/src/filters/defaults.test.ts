@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { DEFAULT_LOW_VALUE_PHRASES } from "./low-value"
 import {
   DEFAULT_RULES,
   DEFAULT_SPAM_KEYWORDS,
@@ -23,6 +24,12 @@ const toRule = (d: DefaultRuleDef): FilterRule => {
 }
 
 const LISTS: ListEntry[] = [
+  ...DEFAULT_LOW_VALUE_PHRASES.map((value) => ({
+    list: "low_value_phrases" as const,
+    kind: "keyword" as const,
+    value,
+    platform: null,
+  })),
   ...DEFAULT_SPAM_KEYWORDS.map((value) => ({
     list: "spam_keywords" as const,
     kind: "keyword" as const,
@@ -150,6 +157,41 @@ describe("archive_emoji_short", () => {
 
   it("three-word comment is shown", () => {
     expect(run({ text: "love this color" }).decision).toBe("show")
+  })
+})
+
+describe("archive_low_value", () => {
+  it.each([
+    ["instagram", "Good content bro, keep it up 👏"],
+    ["facebook", "Thanks for sharing!"],
+    ["youtube", "Great video sir, very informative 🙏"],
+    ["linkedin", "Congratulations to the team!!"],
+  ] as const)("%s comment %j → archive + low-value tag", (platform, text) => {
+    const r = run({ platform, type: "comment", text })
+    expect(r.decision).toBe("archive")
+    expect(matchedKeys(r)).toContain("archive_low_value")
+    expect(r.tags).toContain("low-value")
+  })
+
+  it.each([
+    "Great video! Which pot do you use?",
+    "The new menu looks amazing, can't wait to try the duck!",
+    "Thanks for the reply! The tip about skimming worked perfectly.",
+  ])("comment %j is shown", (text) => {
+    expect(run({ platform: "youtube", text }).decision).toBe("show")
+  })
+
+  it.each([
+    ["dm", "instagram", null],
+    ["review", "google_business", 5],
+  ] as const)("generic praise as a %s is shown", (type, platform, rating) => {
+    const r = run({ platform, type, text: "Thanks for sharing, great work team", rating })
+    expect(matchedKeys(r)).not.toContain("archive_low_value")
+  })
+
+  it("allowlisted authors are never archived as low-value", () => {
+    const r = run({ authorHandle: "vip_customer", text: "Good content bro" })
+    expect(r.decision).toBe("show")
   })
 })
 

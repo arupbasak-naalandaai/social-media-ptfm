@@ -25,6 +25,8 @@ const LIST_DESCRIPTIONS: Record<ListName, string> = {
     "VIP customers and partners: always shown in the inbox at high priority, even if other rules would filter them.",
   spam_keywords: "Comments and DMs containing any of these phrases are archived as likely spam.",
   trusted_domains: "Links to these domains never count as spam links. Subdomains are included.",
+  low_value_phrases:
+    "Generic praise and thanks. A comment made only of these phrases, plus filler like “bro”, “so”, “keep it up” and emoji, is archived. Questions and links never match.",
 }
 
 const PLACEHOLDERS: Record<ListKind, string> = {

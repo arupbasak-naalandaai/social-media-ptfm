@@ -216,8 +216,14 @@ model Item {
   parentExternalId  String?
   conversationId    String?
   conversation      Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  /// Groups a DM conversation, a comment with its replies, or a review (see pipeline threads.ts).
+  threadKey         String?
+  /// New activity in a thread we already replied to or resolved: shown under Follow-ups.
+  isFollowUp        Boolean         @default(false)
   postId            String?
   postUrl           String?
+  /// The platform's permalink to this item, when its API returns one.
+  externalUrl       String?
   postTitle         String?
   postPublishedAt   DateTime?
   authorName        String?
@@ -265,6 +271,8 @@ model Item {
   @@unique([organizationId, platform, platformAccountId, externalId])
   @@index([organizationId, status, receivedAt(sort: Desc)])
   @@index([organizationId, platform, type])
+  @@index([organizationId, threadKey])
+  @@index([organizationId, isFollowUp, status])
   @@index([conversationId])
   @@map("item")
 }

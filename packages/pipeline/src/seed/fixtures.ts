@@ -155,6 +155,17 @@ interface Template {
   post?: number
   thread?: string
   replyToOurReply?: boolean
+  /** Name this item so a later follow-up can reply under it (`parentKey`). */
+  key?: string
+  /** A reply to the comment named `key` (same thread). */
+  parentKey?: string
+  /** We already answered this one: the seed marks it replied/resolved after ingest. */
+  ourReply?: SeedReply
+}
+
+export interface SeedReply {
+  text: string | null
+  status: "replied" | "resolved"
 }
 
 /** Work the team should see. */
@@ -165,6 +176,10 @@ const REAL: Template[] = [
     type: "review",
     rating: 5,
     text: "Best ramen in town. The broth is incredibly rich and the staff remembered our order from last time!",
+    ourReply: {
+      text: "Thank you so much! We'll pass this on to the kitchen team 🍜",
+      status: "replied",
+    },
   },
   {
     platform: "google_business",
@@ -189,6 +204,7 @@ const REAL: Template[] = [
     type: "review",
     rating: 3,
     text: "Decent but overpriced for the portion size.",
+    ourReply: { text: null, status: "resolved" },
   },
   { platform: "google_business", type: "review", rating: 5, text: null },
   { platform: "google_business", type: "review", rating: 4, text: null },
@@ -266,6 +282,18 @@ const REAL: Template[] = [
   {
     platform: "instagram",
     type: "comment",
+    post: 0,
+    key: "ig-vegan",
+    author: ["Sophie Martin", "sophiem"],
+    text: "Do you have vegan options on the new menu?",
+    ourReply: {
+      text: "Yes! The mushroom ragù and the pumpkin soup are both fully vegan 🌱",
+      status: "replied",
+    },
+  },
+  {
+    platform: "instagram",
+    type: "comment",
     post: 1,
     text: "How long do you proof the sourdough for?",
   },
@@ -338,6 +366,10 @@ const THREADS: { platform: "facebook" | "instagram"; person: number; messages: T
         platform: "facebook",
         type: "dm",
         text: "Hi! Can I book a private dining room for 20 people on Dec 14?",
+        ourReply: {
+          text: "Hi Rahul, yes we can. Could you share a phone number?",
+          status: "replied",
+        },
       },
       {
         platform: "facebook",
@@ -462,6 +494,12 @@ const NOISE: Template[] = [
   { platform: "youtube", type: "comment", post: 0, text: "first" },
   { platform: "youtube", type: "comment", post: 1, text: "👍🏽" },
   { platform: "linkedin", type: "comment", post: 0, text: "Congrats!" },
+  // low-value praise (archive: "Archive low-value comments")
+  { platform: "instagram", type: "comment", post: 0, text: "Good content bro, keep it up 👏" },
+  { platform: "facebook", type: "comment", post: 0, text: "Thanks for sharing!" },
+  { platform: "youtube", type: "comment", post: 0, text: "Great video sir, very informative 🙏" },
+  { platform: "linkedin", type: "comment", post: 0, text: "Wow amazing work team!!" },
+  { platform: "instagram", type: "comment", post: 1, text: "Sooo goood 😍🔥" },
   // tag-only (archive)
   { platform: "instagram", type: "comment", post: 0, text: "@meichen @lucas_silva" },
   { platform: "facebook", type: "comment", post: 0, text: "@Olivia Brown" },
@@ -550,9 +588,32 @@ const NOISE: Template[] = [
   { platform: "youtube", type: "comment", post: 1, text: "Where did you buy that stockpot?" },
 ]
 
+/** Later activity under items we already answered (they land under Follow-ups). */
+const FOLLOW_UPS: (Template & { parentKey: string; afterMinutes: number })[] = [
+  {
+    platform: "instagram",
+    type: "comment",
+    post: 0,
+    parentKey: "ig-vegan",
+    afterMinutes: 180,
+    author: ["Sophie Martin", "sophiem"],
+    text: "Amazing, is the ragù gluten free too? Asking for my sister.",
+  },
+  {
+    platform: "instagram",
+    type: "comment",
+    post: 0,
+    parentKey: "ig-vegan",
+    afterMinutes: 200,
+    author: ["Sophie Martin", "sophiem"],
+    text: "Thank you so much!! 🙏",
+  },
+]
+
 export interface SeedItem {
   accountKey: Platform
   item: NormalizedItem
+  ourReply?: SeedReply
 }
 
 /** Builds ~100 normalized items with receivedAt spread over the last 14 days. */
@@ -562,11 +623,16 @@ export function buildSeedItems(now: Date = new Date()): SeedItem[] {
   let n = 0
   const minutesAgo = (maxDays: number) => Math.floor(rand() * maxDays * 24 * 60)
 
+  const keyed = new Map<string, { externalId: string; receivedAt: Date }>()
+
   const make = (
     t: Template,
     opts: { receivedAt: Date; author?: readonly [string, string]; thread?: string },
   ) => {
     n++
+    const externalId = `seed-${t.platform}-${n}`
+    if (t.key) keyed.set(t.key, { externalId, receivedAt: opts.receivedAt })
+    const parent = t.parentKey ? keyed.get(t.parentKey) : undefined
     const account = SEED_ACCOUNTS.find((a) => a.platform === t.platform)!
     const author = t.own
       ? ([account.displayName, account.handle] as const)
@@ -580,10 +646,12 @@ export function buildSeedItems(now: Date = new Date()): SeedItem[] {
       platform: t.platform,
       type: t.type,
       eventKind: t.eventKind ?? "created",
-      externalId: `seed-${t.platform}-${n}`,
-      parentExternalId: t.replyToOurReply ? `seed-${t.platform}-our-reply` : null,
+      externalId,
+      parentExternalId:
+        parent?.externalId ?? (t.replyToOurReply ? `seed-${t.platform}-our-reply` : null),
       postId: post?.id ?? (t.platform === "google_business" ? account.externalId : null),
       postUrl: post?.url ?? null,
+      externalUrl: null,
       postTitle: post?.title ?? (t.platform === "google_business" ? account.displayName : null),
       postPublishedAt: post ? new Date(now.getTime() - post.ageDays * 86_400_000) : null,
       authorName: author[0],
@@ -608,7 +676,7 @@ export function buildSeedItems(now: Date = new Date()): SeedItem[] {
           : null,
       raw: { seed: true, template: n },
     }
-    out.push({ accountKey: t.platform, item })
+    out.push({ accountKey: t.platform, item, ...(t.ourReply ? { ourReply: t.ourReply } : {}) })
   }
 
   const at = (mins: number) => new Date(now.getTime() - mins * 60_000)
@@ -630,6 +698,14 @@ export function buildSeedItems(now: Date = new Date()): SeedItem[] {
   })
 
   for (const t of NOISE) make(t, { receivedAt: at(minutesAgo(14)) })
+
+  for (const t of FOLLOW_UPS) {
+    const parent = keyed.get(t.parentKey)!
+    const receivedAt = new Date(
+      Math.min(parent.receivedAt.getTime() + t.afterMinutes * 60_000, now.getTime() - 60_000),
+    )
+    make(t, { receivedAt })
+  }
 
   // Top up with varied everyday comments so lists and pagination have volume.
   const filler: Template[] = [

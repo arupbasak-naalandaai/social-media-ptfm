@@ -3,20 +3,31 @@ import { HTTPException } from "hono/http-exception"
 import { z } from "zod"
 import {
   DM_REPLY_WINDOW_HOURS,
+  ENGAGED_STATUSES,
+  LEARN_PHRASE_ERRORS,
+  OPEN_STATUSES,
   VIEW_STATUSES,
+  followUpListQuerySchema,
+  itemLink,
   itemListQuerySchema,
+  learnLowValuePhrase,
   restoreItemSchema,
+  type FollowUpListResponse,
+  type FollowUpThread,
+  type HideSimilarResponse,
   type InboxView,
+  type ItemCounts,
   type ItemDetail,
   type ItemListResponse,
   type ItemStatus,
   type ItemSummary,
+  type ThreadEntry,
 } from "@inbox/core"
-import type { Prisma, PrismaClient } from "@inbox/db"
-import { notifyInbox } from "@inbox/pipeline"
+import { Prisma, type PrismaClient } from "@inbox/db"
+import { markLaterItemsAsFollowUps, notifyInbox } from "@inbox/pipeline"
 import type { JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
-import { requireAuth } from "../middleware/session"
+import { requireAuth, requireRole } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface ItemRouteDeps {
@@ -25,6 +36,7 @@ export interface ItemRouteDeps {
 }
 
 const SINCE_MS = { "24h": 86_400_000, "7d": 7 * 86_400_000, "30d": 30 * 86_400_000 } as const
+const HIDDEN_STATUSES = VIEW_STATUSES.filtered
 
 const summarySelect = {
   id: true,
@@ -33,6 +45,7 @@ const summarySelect = {
   status: true,
   priority: true,
   eventKind: true,
+  externalId: true,
   authorName: true,
   authorHandle: true,
   authorAvatarUrl: true,
@@ -40,23 +53,70 @@ const summarySelect = {
   rating: true,
   language: true,
   tags: true,
+  postId: true,
   postTitle: true,
   postUrl: true,
+  externalUrl: true,
   receivedAt: true,
   filterReason: true,
   manualOverride: true,
   conversationId: true,
-  platformAccount: { select: { displayName: true } },
+  isFollowUp: true,
+  platformAccount: { select: { displayName: true, externalId: true } },
 } satisfies Prisma.ItemSelect
 
 type SummaryRow = Prisma.ItemGetPayload<{ select: typeof summarySelect }>
 
 export function toSummary(row: SummaryRow): ItemSummary {
-  const { platformAccount, receivedAt, ...rest } = row
-  return { ...rest, receivedAt: receivedAt.toISOString(), accountName: platformAccount.displayName }
+  const { platformAccount, receivedAt, externalId, postId, externalUrl, ...rest } = row
+  return {
+    ...rest,
+    receivedAt: receivedAt.toISOString(),
+    accountName: platformAccount.displayName,
+    link: itemLink({
+      platform: row.platform,
+      type: row.type,
+      externalId,
+      postId,
+      postUrl: row.postUrl,
+      externalUrl,
+      accountExternalId: platformAccount.externalId,
+    }),
+  }
 }
 
 const idParam = z.object({ id: z.string().min(1).max(64) })
+
+/** Filters shared by the item list and the follow-ups list (everything except status). */
+function commonWhere(q: {
+  platform?: ItemSummary["platform"][] | undefined
+  type?: ItemSummary["type"][] | undefined
+  since: keyof typeof SINCE_MS | "all"
+  q?: string | undefined
+}): Prisma.ItemWhereInput {
+  return {
+    ...(q.platform ? { platform: { in: q.platform } } : {}),
+    ...(q.type ? { type: { in: q.type } } : {}),
+    ...(q.since !== "all" ? { receivedAt: { gte: new Date(Date.now() - SINCE_MS[q.since]) } } : {}),
+    ...(q.q
+      ? {
+          OR: [
+            { text: { contains: q.q, mode: "insensitive" } },
+            { authorName: { contains: q.q, mode: "insensitive" } },
+            { authorHandle: { contains: q.q, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  }
+}
+
+/** Where clause for a view. The inbox leaves out follow-ups: they have their own tab. */
+function viewWhere(view: InboxView, statuses: readonly ItemStatus[]): Prisma.ItemWhereInput {
+  return {
+    status: { in: [...statuses] },
+    ...(view === "inbox" ? { isFollowUp: false } : {}),
+  }
+}
 
 export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
   async function findOwned(organizationId: string, id: string) {
@@ -77,6 +137,25 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
     return toSummary(updated)
   }
 
+  async function countViews(organizationId: string): Promise<ItemCounts> {
+    const views = Object.keys(VIEW_STATUSES) as InboxView[]
+    const [followUps, ...counts] = await Promise.all([
+      prisma.item.count({
+        where: { organizationId, isFollowUp: true, status: { in: [...OPEN_STATUSES] } },
+      }),
+      ...views.map((view) =>
+        prisma.item.count({ where: { organizationId, ...viewWhere(view, VIEW_STATUSES[view]) } }),
+      ),
+    ])
+    return {
+      ...(Object.fromEntries(views.map((v, i) => [v, counts[i] ?? 0])) as Record<
+        InboxView,
+        number
+      >),
+      followUps,
+    }
+  }
+
   return (
     new Hono<AppEnv>()
       .use("*", requireAuth)
@@ -84,27 +163,13 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
       .get("/", validate("query", itemListQuerySchema), async (c) => {
         const org = c.get("org")!
         const q = c.req.valid("query")
-        const base: Prisma.ItemWhereInput = { organizationId: org.id }
         const statuses: readonly ItemStatus[] = q.status?.length ? q.status : VIEW_STATUSES[q.view]
         const where: Prisma.ItemWhereInput = {
-          ...base,
-          status: { in: [...statuses] },
-          ...(q.platform ? { platform: { in: q.platform } } : {}),
-          ...(q.type ? { type: { in: q.type } } : {}),
+          organizationId: org.id,
+          ...viewWhere(q.view, statuses),
+          ...commonWhere(q),
           ...(q.priority ? { priority: { in: q.priority } } : {}),
           ...(q.tag ? { tags: { has: q.tag } } : {}),
-          ...(q.since !== "all"
-            ? { receivedAt: { gte: new Date(Date.now() - SINCE_MS[q.since]) } }
-            : {}),
-          ...(q.q
-            ? {
-                OR: [
-                  { text: { contains: q.q, mode: "insensitive" } },
-                  { authorName: { contains: q.q, mode: "insensitive" } },
-                  { authorHandle: { contains: q.q, mode: "insensitive" } },
-                ],
-              }
-            : {}),
         }
         const orderBy: Prisma.ItemOrderByWithRelationInput[] =
           q.sort === "priority"
@@ -113,7 +178,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
         // Opaque offset cursor (stable enough for an inbox; keyset can replace it later).
         const offset = q.cursor ? Math.max(0, Number.parseInt(q.cursor, 10) || 0) : 0
 
-        const [rows, ...counts] = await Promise.all([
+        const [rows, counts] = await Promise.all([
           prisma.item.findMany({
             where,
             orderBy,
@@ -121,19 +186,116 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
             take: q.limit + 1,
             select: summarySelect,
           }),
-          ...(Object.keys(VIEW_STATUSES) as InboxView[]).map((view) =>
-            prisma.item.count({ where: { ...base, status: { in: [...VIEW_STATUSES[view]] } } }),
-          ),
+          countViews(org.id),
         ])
         const hasMore = rows.length > q.limit
-        const views = Object.keys(VIEW_STATUSES) as InboxView[]
         const body: ItemListResponse = {
           items: rows.slice(0, q.limit).map(toSummary),
           nextCursor: hasMore ? String(offset + q.limit) : null,
-          counts: Object.fromEntries(views.map((v, i) => [v, counts[i] ?? 0])) as Record<
-            InboxView,
-            number
-          >,
+          counts,
+        }
+        return c.json(body)
+      })
+
+      /**
+       * Threads you engaged with (replied to or resolved), newest activity first. Threads where
+       * the person wrote again (open follow-ups) always come first, on the first page.
+       */
+      .get("/follow-ups", validate("query", followUpListQuerySchema), async (c) => {
+        const org = c.get("org")!
+        const q = c.req.valid("query")
+        const offset = q.cursor ? Math.max(0, Number.parseInt(q.cursor, 10) || 0) : 0
+        const filters = commonWhere(q)
+        const threadKeyNotNull = { threadKey: { not: null } } satisfies Prisma.ItemWhereInput
+        const byActivity = [
+          { _max: { receivedAt: "desc" } },
+          { threadKey: "asc" },
+        ] satisfies Prisma.ItemOrderByWithAggregationInput[]
+
+        const active = await prisma.item.groupBy({
+          by: ["threadKey"],
+          where: {
+            organizationId: org.id,
+            ...threadKeyNotNull,
+            isFollowUp: true,
+            status: { in: [...OPEN_STATUSES] },
+            ...filters,
+          },
+          _max: { receivedAt: true },
+          orderBy: byActivity,
+          take: 200,
+        })
+        const activeKeys = active.map((g) => g.threadKey!)
+
+        const rest = await prisma.item.groupBy({
+          by: ["threadKey"],
+          where: {
+            organizationId: org.id,
+            AND: [threadKeyNotNull, { threadKey: { notIn: activeKeys } }],
+            status: { in: [...ENGAGED_STATUSES] },
+            ...filters,
+          },
+          _max: { receivedAt: true },
+          orderBy: byActivity,
+          skip: offset,
+          take: q.limit + 1,
+        })
+        const hasMore = rest.length > q.limit
+        const keys = [
+          ...(offset === 0 ? activeKeys : []),
+          ...rest.slice(0, q.limit).map((g) => g.threadKey!),
+        ]
+
+        const [items, counts] = await Promise.all([
+          keys.length
+            ? prisma.item.findMany({
+                where: {
+                  organizationId: org.id,
+                  threadKey: { in: keys },
+                  status: { notIn: [...HIDDEN_STATUSES] },
+                },
+                orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+                select: { ...summarySelect, threadKey: true, resolvedAt: true },
+              })
+            : Promise.resolve([]),
+          countViews(org.id),
+        ])
+
+        const byThread = new Map<string, typeof items>()
+        for (const it of items) {
+          const list = byThread.get(it.threadKey!) ?? []
+          list.push(it)
+          byThread.set(it.threadKey!, list)
+        }
+        const threads: FollowUpThread[] = keys.flatMap((key) => {
+          const list = byThread.get(key)
+          if (!list?.length) return []
+          const open = list.filter(
+            (i) => i.isFollowUp && (OPEN_STATUSES as readonly ItemStatus[]).includes(i.status),
+          )
+          const engagedAt = list
+            .filter((i) => (ENGAGED_STATUSES as readonly ItemStatus[]).includes(i.status))
+            .map((i) => i.resolvedAt?.getTime() ?? 0)
+          const pick = open[0] ?? list[0]!
+          const { threadKey: _k, resolvedAt: _r, ...summary } = pick
+          return [
+            {
+              threadKey: key,
+              item: toSummary(summary),
+              itemCount: list.length,
+              newCount: open.length,
+              lastEngagedAt: engagedAt.length
+                ? new Date(Math.max(...engagedAt)).toISOString()
+                : null,
+              lastActivityAt: list[0]!.receivedAt.toISOString(),
+            },
+          ]
+        })
+
+        const body: FollowUpListResponse = {
+          threads,
+          nextCursor: hasMore ? String(offset + q.limit) : null,
+          counts,
         }
         return c.json(body)
       })
@@ -145,15 +307,16 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           where: { id, organizationId: org.id },
           select: {
             ...summarySelect,
-            externalId: true,
-            postId: true,
+            threadKey: true,
             isOwnAccount: true,
             aiDraftsAllowed: true,
             requireApproval: true,
             resolvedAt: true,
             matchedRuleIds: true,
             dryRunRuleIds: true,
-            platformAccount: { select: { displayName: true, accessTokenEnc: true } },
+            platformAccount: {
+              select: { displayName: true, externalId: true, accessTokenEnc: true },
+            },
             conversation: { select: { customerLastMessageAt: true } },
             aiDrafts: {
               orderBy: { createdAt: "asc" },
@@ -183,20 +346,49 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           : []
         const ruleName = new Map(rules.map((r) => [r.id, r.name]))
 
-        const thread = row.conversationId
-          ? await prisma.item.findMany({
-              where: { organizationId: org.id, conversationId: row.conversationId },
-              orderBy: { receivedAt: "asc" },
-              select: {
-                id: true,
-                text: true,
-                receivedAt: true,
-                authorName: true,
-                eventKind: true,
-                status: true,
-              },
-            })
-          : []
+        const threadItems = await prisma.item.findMany({
+          where: row.threadKey
+            ? { organizationId: org.id, threadKey: row.threadKey }
+            : { organizationId: org.id, id: row.id },
+          orderBy: { receivedAt: "asc" },
+          take: 200,
+          select: {
+            id: true,
+            text: true,
+            receivedAt: true,
+            authorName: true,
+            eventKind: true,
+            status: true,
+            isOwnAccount: true,
+            replies: {
+              select: { id: true, text: true, status: true, sentAt: true, createdAt: true },
+            },
+          },
+        })
+        const thread: ThreadEntry[] = threadItems
+          .flatMap((t): ThreadEntry[] => [
+            {
+              id: t.id,
+              kind: "item",
+              text: t.text,
+              at: t.receivedAt.toISOString(),
+              authorName: t.authorName,
+              eventKind: t.eventKind,
+              status: t.status,
+              ours: t.isOwnAccount,
+            },
+            ...t.replies.map((r): ThreadEntry => ({
+              id: r.id,
+              kind: "reply",
+              text: r.text,
+              at: (r.sentAt ?? r.createdAt).toISOString(),
+              authorName: row.platformAccount.displayName,
+              eventKind: "created",
+              status: r.status,
+              ours: true,
+            })),
+          ])
+          .sort((a, b) => a.at.localeCompare(b.at))
 
         const windowHours = row.type === "dm" ? DM_REPLY_WINDOW_HOURS[row.platform] : undefined
         const last = row.conversation?.customerLastMessageAt ?? null
@@ -211,15 +403,19 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           replies,
           resolvedAt,
           platformAccount,
+          threadKey: _threadKey,
+          isOwnAccount,
+          aiDraftsAllowed,
+          requireApproval,
           ...summaryFields
         } = row
         const detail: ItemDetail = {
           ...toSummary({ ...summaryFields, platformAccount }),
           externalId: row.externalId,
           postId: row.postId,
-          isOwnAccount: row.isOwnAccount,
-          aiDraftsAllowed: row.aiDraftsAllowed,
-          requireApproval: row.requireApproval,
+          isOwnAccount,
+          aiDraftsAllowed,
+          requireApproval,
           resolvedAt: resolvedAt?.toISOString() ?? null,
           matchedRules: [
             ...matchedRuleIds.map((id) => ({
@@ -233,7 +429,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
               dryRun: true,
             })),
           ],
-          thread: thread.map((t) => ({ ...t, receivedAt: t.receivedAt.toISOString() })),
+          thread,
           replyWindow: windowHours
             ? {
                 hours: windowHours,
@@ -263,6 +459,20 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           },
           "resolved",
         )
+        // Anything the person wrote after this item is now a follow-up.
+        const stored = await prisma.item.findUniqueOrThrow({
+          where: { id },
+          select: { id: true, organizationId: true, threadKey: true, receivedAt: true },
+        })
+        const moved = await markLaterItemsAsFollowUps(prisma, stored)
+        if (moved.length) {
+          await notifyInbox(prisma, {
+            type: "items.changed",
+            organizationId: org.id,
+            itemIds: moved,
+            reason: "follow-up",
+          })
+        }
         return c.json(item)
       })
 
@@ -298,6 +508,76 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
             "archived",
           ),
         )
+      })
+
+      /**
+       * "Hide similar": learns a low-value phrase from this item's text, adds it to the
+       * Low-value phrases list, archives the item, and re-filters so look-alikes leave the inbox.
+       */
+      .post("/:id/hide-similar", requireRole("admin"), validate("param", idParam), async (c) => {
+        const org = c.get("org")!
+        const user = c.get("user")!
+        const { id } = c.req.valid("param")
+        const before = await findOwned(org.id, id)
+        const learned = learnLowValuePhrase(before.text)
+        if (!learned.ok) {
+          throw new HTTPException(400, { message: LEARN_PHRASE_ERRORS[learned.reason] })
+        }
+        const { phrase } = learned
+        const listed = { organizationId: org.id, list: "low_value_phrases", kind: "keyword" }
+
+        let entryId: string | null = null
+        const existing = await prisma.listEntry.findFirst({
+          where: { ...listed, value: phrase, platform: null },
+          select: { id: true },
+        })
+        if (!existing) {
+          try {
+            const entry = await prisma.listEntry.create({
+              data: {
+                ...listed,
+                value: phrase,
+                platform: null,
+                note: `Learned from “${(before.text ?? "").slice(0, 80)}”`,
+                createdById: user.id,
+              },
+            })
+            entryId = entry.id
+          } catch (err) {
+            // A concurrent "Hide similar" added the same phrase: fine.
+            if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"))
+              throw err
+          }
+        }
+
+        const item = await setStatus(
+          org.id,
+          id,
+          {
+            status: "archived",
+            filterReason: `Hidden as low-value (“${phrase}”)`,
+            manualOverride: true,
+            tags: before.tags.includes("low-value") ? before.tags : [...before.tags, "low-value"],
+          },
+          "hidden-similar",
+        )
+        await prisma.auditLog.create({
+          data: {
+            organizationId: org.id,
+            actorId: user.id,
+            action: "item.hide_similar",
+            entity: "item",
+            entityId: id,
+            before: { status: before.status },
+            after: { status: "archived", phrase, listEntryId: entryId },
+          },
+        })
+        if (entryId) {
+          await notifyInbox(prisma, { type: "lists.changed", organizationId: org.id })
+          await jobs.enqueueRefilter(org.id, c.get("requestId"))
+        }
+        const body: HideSimilarResponse = { item, phrase, entryId }
+        return c.json(body)
       })
 
       /** "Not spam / restore": back to the inbox, optionally allowlisting the author. */

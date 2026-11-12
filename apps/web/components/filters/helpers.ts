@@ -36,6 +36,7 @@ export const FIELD_GROUPS: { label: string; fields: ConditionField[] }[] = [
       "mentionCount",
       "isEmojiOnly",
       "isMentionOnly",
+      "isLowValue",
     ],
   },
   { label: "Author", fields: ["authorName", "authorHandle", "authorId", "isOwnAccount"] },
@@ -51,6 +52,7 @@ export const LIST_LABELS: Record<ListName, string> = {
   allowlist: "Allowlist",
   spam_keywords: "Spam keywords",
   trusted_domains: "Trusted domains",
+  low_value_phrases: "Low-value phrases",
 }
 
 export const KIND_LABELS: Record<ListKind, string> = {

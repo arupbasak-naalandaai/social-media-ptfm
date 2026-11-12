@@ -249,6 +249,21 @@ const ROWS: Row[] = [
   ...boolRows("hasLink", { text: "see https://x.com" }, { text: "no link" }),
   ...boolRows("isEmojiOnly", { text: "🔥🔥" }, { text: "🔥 nice" }),
   ...boolRows("isMentionOnly", { text: "@a @b" }, { text: "@a hi" }),
+  ...boolRows("isLowValue", { text: "Good content bro 👏" }, { text: "Good content, when?" }).map(
+    (r) => ({
+      ...r,
+      ctx: {
+        lists: [
+          {
+            list: "low_value_phrases" as const,
+            kind: "keyword" as const,
+            value: "good content",
+            platform: null,
+          },
+        ],
+      },
+    }),
+  ),
 
   // String list (link domains)
   {

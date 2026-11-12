@@ -71,7 +71,13 @@ export type Sentiment = (typeof SENTIMENTS)[number]
 
 // ─── Lists (blocklist / allowlist / keyword lists) ───────────────────────────
 
-export const LIST_NAMES = ["blocklist", "allowlist", "spam_keywords", "trusted_domains"] as const
+export const LIST_NAMES = [
+  "blocklist",
+  "allowlist",
+  "spam_keywords",
+  "trusted_domains",
+  "low_value_phrases",
+] as const
 export const listNameSchema = z.enum(LIST_NAMES)
 export type ListName = z.infer<typeof listNameSchema>
 
@@ -109,6 +115,7 @@ export const CONDITION_FIELDS = [
   "mentionCount",
   "isEmojiOnly",
   "isMentionOnly",
+  "isLowValue",
   "postId",
   "postAgeDays",
   "eventKind",
@@ -315,6 +322,8 @@ export interface DerivedFields {
   mentionCount: number
   isEmojiOnly: boolean
   isMentionOnly: boolean
+  /** Only generic praise/thanks from the low_value_phrases list (see low-value.ts). */
+  isLowValue: boolean
   postAgeDays: number | null
   receivedHour: number
 }

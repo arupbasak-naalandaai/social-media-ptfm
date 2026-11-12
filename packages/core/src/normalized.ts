@@ -19,6 +19,8 @@ export interface NormalizedItem {
   parentExternalId: string | null
   postId: string | null
   postUrl: string | null
+  /** The platform's permalink to this item, when its API returns one (e.g. FB `permalink_url`). */
+  externalUrl: string | null
   postTitle: string | null
   postPublishedAt: Date | null
   authorName: string | null

@@ -2,14 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Search, Tag, X } from "lucide-react"
-import {
-  ITEM_TYPES,
-  PLATFORMS,
-  PRIORITIES,
-  VIEW_STATUSES,
-  type InboxView,
-  type ItemStatus,
-} from "@inbox/core"
+import { ITEM_TYPES, PLATFORMS, PRIORITIES, VIEW_STATUSES, type ItemStatus } from "@inbox/core"
 import { PLATFORM_LABELS, PlatformIcon } from "@/components/app/platform-icon"
 import { STATUS_LABELS, TYPE_LABELS } from "@/components/app/item-badges"
 import { Button } from "@/components/ui/button"
@@ -31,7 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { MultiSelect } from "./multi-select"
-import type { ItemFilters, Since, Sort } from "./use-item-filters"
+import type { ItemFilters, ListView, Since, Sort } from "./use-item-filters"
 
 const PRIORITY_LABELS = { urgent: "Urgent", high: "High", normal: "Normal", low: "Low" } as const
 const SINCE_ITEMS: { value: Since; label: string }[] = [
@@ -47,7 +40,7 @@ const SORT_ITEMS: { value: Sort; label: string }[] = [
 ]
 
 /** Tags the default rules add; tags seen in the current results are merged in. */
-const KNOWN_TAGS = ["vip", "complaint", "low-rating", "spam"]
+const KNOWN_TAGS = ["vip", "complaint", "low-rating", "low-value", "spam"]
 
 export function Toolbar({
   view,
@@ -57,7 +50,7 @@ export function Toolbar({
   clearFilters,
   seenTags,
 }: {
-  view: InboxView
+  view: ListView
   filters: ItemFilters
   update: (patch: Record<string, string | string[] | null>) => void
   hasFilters: boolean
@@ -80,8 +73,10 @@ export function Toolbar({
     if (search.trim() !== filters.q) setSearch(filters.q)
   }
 
+  // Follow-ups are threads, not items: only search, platform, type and date apply.
+  const threads = view === "followups"
   const statusOptions =
-    view === "inbox"
+    view === "inbox" || view === "followups"
       ? null
       : VIEW_STATUSES[view].map((s) => ({ value: s, label: STATUS_LABELS[s] }))
   const tags = [...new Set([...KNOWN_TAGS, ...seenTags])].sort()
@@ -114,12 +109,14 @@ export function Toolbar({
         value={filters.type}
         onChange={(v) => update({ type: v })}
       />
-      <MultiSelect
-        label="Priority"
-        options={[...PRIORITIES].reverse().map((p) => ({ value: p, label: PRIORITY_LABELS[p] }))}
-        value={filters.priority}
-        onChange={(v) => update({ priority: v })}
-      />
+      {threads ? null : (
+        <MultiSelect
+          label="Priority"
+          options={[...PRIORITIES].reverse().map((p) => ({ value: p, label: PRIORITY_LABELS[p] }))}
+          value={filters.priority}
+          onChange={(v) => update({ priority: v })}
+        />
+      )}
       {statusOptions ? (
         <MultiSelect<ItemStatus>
           label="Status"
@@ -128,30 +125,7 @@ export function Toolbar({
           onChange={(v) => update({ status: v })}
         />
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={<Button variant="outline" size="sm" className="h-8 gap-1.5 border-dashed" />}
-        >
-          <Tag className="size-3.5" />
-          {filters.tag || "Tag"}
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-40">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Tag</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={filters.tag}
-              onValueChange={(v) => update({ tag: String(v) || null })}
-            >
-              <DropdownMenuRadioItem value="">Any tag</DropdownMenuRadioItem>
-              {tags.map((t) => (
-                <DropdownMenuRadioItem key={t} value={t}>
-                  {t}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {threads ? null : <TagMenu filters={filters} update={update} tags={tags} />}
       <Select
         items={SINCE_ITEMS}
         value={filters.since}
@@ -173,7 +147,7 @@ export function Toolbar({
           <X className="size-3.5" /> Clear filters
         </Button>
       ) : null}
-      <div className="ml-auto">
+      <div className={threads ? "hidden" : "ml-auto"}>
         <Select
           items={SORT_ITEMS}
           value={filters.sort}
@@ -192,5 +166,42 @@ export function Toolbar({
         </Select>
       </div>
     </div>
+  )
+}
+
+function TagMenu({
+  filters,
+  update,
+  tags,
+}: {
+  filters: ItemFilters
+  update: (patch: Record<string, string | string[] | null>) => void
+  tags: string[]
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="outline" size="sm" className="h-8 gap-1.5 border-dashed" />}
+      >
+        <Tag className="size-3.5" />
+        {filters.tag || "Tag"}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-40">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Tag</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={filters.tag}
+            onValueChange={(v) => update({ tag: String(v) || null })}
+          >
+            <DropdownMenuRadioItem value="">Any tag</DropdownMenuRadioItem>
+            {tags.map((t) => (
+              <DropdownMenuRadioItem key={t} value={t}>
+                {t}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

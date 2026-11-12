@@ -3,6 +3,7 @@ import type { Logger } from "@inbox/core/logger"
 import type { Prisma, PrismaClient } from "@inbox/db"
 import type { OrgFilterSetup } from "./context"
 import { filterColumns, normalizedToFilterInput, statusForDecision } from "./mapping"
+import { isEngagedThread, threadKeyFor } from "./threads"
 
 export type IngestOutcome =
   | { outcome: "created"; itemId: string; result: FilterResult }
@@ -23,6 +24,7 @@ export interface IngestArgs {
  * - already stored + edited/deleted → update the stored item (no new row)
  * - already stored otherwise (webhook + reconcile overlap) → duplicate, no-op
  * - new → run the filter engine; drop → not stored; else create with the rule outcome.
+ *   A new item in a thread we already engaged with (or a reply to our reply) is a follow-up.
  */
 export async function ingestNormalizedItem(
   prisma: PrismaClient,
@@ -75,6 +77,16 @@ export async function ingestNormalizedItem(
     ? await upsertConversation(prisma, organizationId, platformAccountId, item)
     : null
 
+  const threadKey = threadKeyFor({
+    platformAccountId,
+    type: item.type,
+    externalId: item.externalId,
+    parentExternalId: item.parentExternalId,
+    conversationId,
+  })
+  const isFollowUp =
+    item.isReplyToOurReply || (await isEngagedThread(prisma, organizationId, threadKey))
+
   const created = await prisma.item.create({
     data: {
       organizationId,
@@ -84,8 +96,11 @@ export async function ingestNormalizedItem(
       externalId: item.externalId,
       parentExternalId: item.parentExternalId,
       conversationId,
+      threadKey,
+      isFollowUp,
       postId: item.postId,
       postUrl: item.postUrl,
+      externalUrl: item.externalUrl,
       postTitle: item.postTitle,
       postPublishedAt: item.postPublishedAt,
       authorName: item.authorName,

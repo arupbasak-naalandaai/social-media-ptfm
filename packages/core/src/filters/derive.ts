@@ -2,6 +2,7 @@
  * Derived fields computed from a normalized item: text stats, links, mentions, emoji,
  * post age and received hour. Pure: depends only on the input and the context.
  */
+import { compileLowValuePhrases, isLowValueText } from "./low-value"
 import type { DerivedFields, FilterContext, FilterInput } from "./types"
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -48,6 +49,32 @@ function hourIn(date: Date, timezone: string): number {
   return Number.isFinite(hour) ? hour % 24 : date.getUTCHours()
 }
 
+/** Compiled low-value phrases per lists array and platform (re-filtering reuses one context). */
+const phraseCache = new WeakMap<FilterContext["lists"], Map<string, string[][]>>()
+
+function lowValuePhrasesFor(ctx: FilterContext, platform: FilterInput["platform"]): string[][] {
+  let byPlatform = phraseCache.get(ctx.lists)
+  if (!byPlatform) {
+    byPlatform = new Map()
+    phraseCache.set(ctx.lists, byPlatform)
+  }
+  let compiled = byPlatform.get(platform)
+  if (!compiled) {
+    compiled = compileLowValuePhrases(
+      ctx.lists
+        .filter(
+          (e) =>
+            e.list === "low_value_phrases" &&
+            e.kind === "keyword" &&
+            (e.platform === null || e.platform === platform),
+        )
+        .map((e) => e.value),
+    )
+    byPlatform.set(platform, compiled)
+  }
+  return compiled
+}
+
 export function deriveFields(input: FilterInput, ctx: FilterContext): DerivedFields {
   const text = (input.text ?? "").trim()
   const linkDomains = extractDomains(text)
@@ -68,6 +95,8 @@ export function deriveFields(input: FilterInput, ctx: FilterContext): DerivedFie
       .replace(/[\s\p{P}]/gu, "")
       .trim() === ""
 
+  const isLowValue = isLowValueText(text, lowValuePhrasesFor(ctx, input.platform))
+
   const postAgeDays =
     input.postPublishedAt === null
       ? null
@@ -82,6 +111,7 @@ export function deriveFields(input: FilterInput, ctx: FilterContext): DerivedFie
     mentionCount,
     isEmojiOnly,
     isMentionOnly,
+    isLowValue,
     postAgeDays,
     receivedHour: hourIn(input.receivedAt, ctx.timezone),
   }

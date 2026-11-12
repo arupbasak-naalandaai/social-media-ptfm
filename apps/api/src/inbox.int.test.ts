@@ -6,7 +6,11 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import {
   DEFAULT_RULES,
   type FilterRuleInput,
+  type FollowUpListResponse,
+  type HideSimilarResponse,
+  type ItemDetail,
   type ItemListResponse,
+  type NormalizedItem,
   type RuleWithStats,
   type Role,
 } from "@inbox/core"
@@ -104,6 +108,51 @@ async function seedOrg() {
 }
 
 const findByText = (list: ItemListResponse, text: string) => list.items.find((i) => i.text === text)
+
+/** Ingests one extra Instagram comment through the real pipeline. */
+async function ingestComment(
+  externalId: string,
+  text: string,
+  over: Partial<NormalizedItem> = {},
+): Promise<string> {
+  const account = await prisma!.platformAccount.findFirstOrThrow({
+    where: { organizationId: ORG, platform: "instagram" },
+  })
+  const res = await ingestNormalizedItem(prisma!, {
+    organizationId: ORG,
+    platformAccountId: account.id,
+    setup: await loadFilterSetup(prisma!, ORG),
+    item: {
+      platform: "instagram",
+      type: "comment",
+      eventKind: "created",
+      externalId,
+      parentExternalId: null,
+      postId: "ig-media-1",
+      postUrl: "https://instagram.com/p/demo1",
+      externalUrl: null,
+      postTitle: "Truffle pasta reel",
+      postPublishedAt: null,
+      authorName: "Nina Park",
+      authorHandle: "nina.park",
+      authorId: "instagram-user-nina",
+      authorAvatarUrl: null,
+      isOwnAccount: false,
+      isReplyToOurReply: false,
+      text,
+      rating: null,
+      language: "en",
+      platformCreatedAt: null,
+      platformUpdatedAt: null,
+      receivedAt: new Date(),
+      conversation: null,
+      raw: {},
+      ...over,
+    },
+  })
+  if (res.outcome !== "created") throw new Error(`expected created, got ${res.outcome}`)
+  return res.itemId
+}
 
 describe.skipIf(!url)("inbox + filters API (integration)", () => {
   beforeEach(async () => {
@@ -332,5 +381,63 @@ describe.skipIf(!url)("inbox + filters API (integration)", () => {
     expect(detail.thread.length).toBeGreaterThan(0)
     expect(detail.replyWindow?.hours).toBe(24)
     expect((await app().request("/api/items/does-not-exist")).status).toBe(404)
+  })
+
+  it("moves later activity in a thread you resolved to Follow-ups", async () => {
+    const parentId = await ingestComment("ig-thread-1", "Do you deliver to the old town?")
+    // Already waiting when we resolve the parent: becomes a follow-up too.
+    const earlyId = await ingestComment("ig-thread-1-a", "Also, is there a minimum order", {
+      parentExternalId: "ig-thread-1",
+      receivedAt: new Date(Date.now() + 1000),
+    })
+    expect((await app().request(`/api/items/${parentId}/resolve`, { method: "POST" })).status).toBe(
+      200,
+    )
+    const lateId = await ingestComment("ig-thread-1-b", "Thanks, and on Sundays as well please", {
+      parentExternalId: "ig-thread-1",
+      receivedAt: new Date(Date.now() + 2000),
+    })
+
+    const inbox = await json<ItemListResponse>(await app().request("/api/items?limit=100"))
+    const inboxIds = inbox.items.map((i) => i.id)
+    expect(inboxIds).not.toContain(earlyId)
+    expect(inboxIds).not.toContain(lateId)
+    expect(inbox.counts.followUps).toBeGreaterThanOrEqual(2)
+    expect(inbox.counts.inbox).toBe(inbox.items.length)
+
+    const follow = await json<FollowUpListResponse>(await app().request("/api/items/follow-ups"))
+    const thread = follow.threads.find((t) => t.item.id === lateId)
+    expect(thread).toMatchObject({ newCount: 2, itemCount: 3 })
+    expect(thread?.lastEngagedAt).not.toBeNull()
+    // Threads with new activity come first.
+    expect(follow.threads[0]!.newCount).toBeGreaterThan(0)
+
+    const detail = await json<ItemDetail>(await app().request(`/api/items/${lateId}`))
+    expect(detail.thread.map((t) => t.id)).toEqual([parentId, earlyId, lateId])
+    expect(detail.isFollowUp).toBe(true)
+    expect(detail.link).toMatchObject({ target: "post", url: "https://instagram.com/p/demo1" })
+  })
+
+  it("hide similar learns a phrase, archives the item and re-filters look-alikes", async () => {
+    const firstId = await ingestComment("ig-lv-1", "Lovely plating chef 👌")
+    const secondId = await ingestComment("ig-lv-2", "lovely plating, chef!!")
+    const res = await app().request(`/api/items/${firstId}/hide-similar`, { method: "POST" })
+    expect(res.status).toBe(200)
+    const body = await json<HideSimilarResponse>(res)
+    expect(body.phrase).toBe("lovely plating chef")
+    expect(body.item.status).toBe("archived")
+    expect(body.entryId).not.toBeNull()
+
+    const second = await prisma!.item.findUniqueOrThrow({ where: { id: secondId } })
+    expect(second.status).toBe("filtered")
+    expect(second.tags).toContain("low-value")
+
+    const question = await ingestComment("ig-lv-3", "Lovely plating, which plates are these?")
+    const rejected = await app().request(`/api/items/${question}/hide-similar`, { method: "POST" })
+    expect(rejected.status).toBe(400)
+    expect(
+      (await app("member").request(`/api/items/${secondId}/hide-similar`, { method: "POST" }))
+        .status,
+    ).toBe(403)
   })
 })

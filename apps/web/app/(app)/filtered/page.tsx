@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Filtered" }
 export default function FilteredPage() {
   return (
     <div className="flex flex-1 flex-col gap-4">
-      <p className="text-sm text-muted-foreground">
+      <p className="mx-auto w-full max-w-5xl text-sm text-muted-foreground">
         Items hidden by your filter rules or archived by a teammate. Nothing here was deleted:
         restore anything that isn&apos;t spam.
       </p>

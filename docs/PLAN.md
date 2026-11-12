@@ -1,6 +1,6 @@
 # Unified Social Inbox: Plan
 
-> Status: **Phase 0 approved, Phase 1 next** · Last updated: 2026-11-12
+> Status: **Phase 2 done; inbox workflow changes (§19) in** · Last updated: 2026-11-13
 > Source of truth for decisions. Progress is tracked in [`PROGRESS.md`](./PROGRESS.md).
 
 ## 1. Goal
@@ -260,7 +260,8 @@ model WebhookEvent {
 model Item {
   id, organizationId, platform Platform, platformAccountId, type ItemType,
   externalId String, parentExternalId String?, conversationId String?,
-  postId String?, postUrl String?, postPublishedAt DateTime?,
+  threadKey String?, isFollowUp Boolean @default(false),   // §19
+  postId String?, postUrl String?, externalUrl String?, postPublishedAt DateTime?,
   authorName String?, authorHandle String?, authorId String?, authorAvatarUrl String?,
   isOwnAccount Boolean @default(false),
   text String?, rating Int?, language String?,
@@ -348,7 +349,7 @@ evaluate(item: FilterInput, rules: FilterRule[], ctx: FilterContext): FilterResu
 - **Validation.** A zod schema per `field` controls which operators and value types are allowed. The UI uses the same schema to pick the right input. Regex is compiled with a length cap and a timeout guard (`re2`-style safety: patterns are rejected if they fail a catastrophic-backtracking heuristic).
 - **Test panel.** `POST /api/filters/test` takes a rule draft plus either sample text or "last 200 items" and returns the matches. It is read-only.
 - **"Not spam / restore"** sets the item to `new`, records the restore in AuditLog, and optionally adds the author to the allowlist.
-- **Default rules** are seeded with stable `defaultKey`s, so later migrations can update them without clobbering user edits. Defaults: own activity / echo **drop**, non-content events **drop**, edits/deletions **archive** (ingest also updates the stored item), emoji-only/very-short comments **archive** (not DMs or reviews), tag-only **archive**, spam heuristics **archive**, blocklist **archive**, allowlist **show + high + stop**, 1–3★ **urgent + priority channel**, 4–5★ no-text **low + no AI**, toxic/complaint **high**, old-post comments **archive** (off, N=30), IG story mentions/reactions **archive** (off).
+- **Default rules** are seeded with stable `defaultKey`s, so later migrations can update them without clobbering user edits. Defaults: own activity / echo **drop**, non-content events **drop**, edits/deletions **archive** (ingest also updates the stored item), emoji-only/very-short comments **archive** (not DMs or reviews), low-value comments **archive** (§19), tag-only **archive**, spam heuristics **archive**, blocklist **archive**, allowlist **show + high + stop**, 1–3★ **urgent + priority channel**, 4–5★ no-text **low + no AI**, toxic/complaint **high**, old-post comments **archive** (off, N=30), IG story mentions/reactions **archive** (off).
 - **Tests** are table-driven for every field × operator and every default rule.
 
 ### As built (Phase 2)
@@ -366,7 +367,7 @@ evaluate(item: FilterInput, rules: FilterRule[], ctx: FilterContext): FilterResu
   - `linkDomain inList/notInList` is subdomain-aware.
   - `ListEntry` uniqueness uses `NULLS NOT DISTINCT`, so "all platforms" entries can't be duplicated.
 - **Default rule priorities:**
-  - Own activity 10, non-content 20, edits/deletions 30, **allowlist 40 (stop)**, blocklist 50, emoji/short 60, tag-only 70, spam 80, 1–3★ 90, 4–5★ no text 100, toxic/complaint 110, old posts 120 (off), IG story DMs 130 (off).
+  - Own activity 10, non-content 20, edits/deletions 30, **allowlist 40 (stop)**, blocklist 50, emoji/short 60, low-value 65, tag-only 70, spam 80, 1–3★ 90, 4–5★ no text 100, toxic/complaint 110, old posts 120 (off), IG story DMs 130 (off).
   - The allowlist therefore beats the archive rules but not the own-activity and noise drops.
   - Defaults have a stable `defaultKey`; the seed only creates missing ones, so edits survive re-seeding.
 - **Re-filtering (`@inbox/pipeline` `refilterOrganization`):**
@@ -519,17 +520,17 @@ Researched 2026-11-12 from official docs. **[verify]** marks items we could not 
 
 ## 13. API surface (Hono)
 
-| Group       | Routes                                                                                                                                                                                                                                               |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Health      | `GET /health`                                                                                                                                                                                                                                        |
-| Auth        | `GET,POST /api/auth/*` (better-auth)                                                                                                                                                                                                                 |
-| Inbox       | `GET /api/items?view=inbox\|done\|filtered&…` (filters, sort, offset cursor, per-view counts), `GET /api/items/:id` (thread, matched rules, reply window), `POST /api/items/:id/{resolve,ignore,reopen,archive,restore}`; `reply` arrives in Phase 4 |
-| Filters     | `GET/POST /api/filters`, `PUT/PATCH/DELETE /api/filters/:id`, `POST /api/filters/{reorder,test,apply}`, `GET/POST /api/lists`, `DELETE /api/lists/:id`                                                                                               |
-| Settings    | `GET/PUT /api/settings/:section`, `POST /api/settings/slack/test`, `POST /api/sync/:id/run`                                                                                                                                                          |
-| Connections | `GET /api/connections`, `POST /api/connections/:id/{test,disconnect}`, `GET /oauth/:platform/{start,callback}`                                                                                                                                       |
-| Live        | `GET /api/stream` (SSE, org-scoped, heartbeat every 20 s)                                                                                                                                                                                            |
-| Activity    | `GET /api/activity/{webhooks,jobs,audit}`, `POST /api/webhooks/:id/replay`                                                                                                                                                                           |
-| Webhooks    | `GET,POST /webhooks/meta`, `GET,POST /webhooks/linkedin`, `POST /webhooks/google`, `POST /slack/events`, `POST /slack/interactions`                                                                                                                  |
+| Group       | Routes                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health      | `GET /health`                                                                                                                                                                                                                                                                                                                                                                      |
+| Auth        | `GET,POST /api/auth/*` (better-auth)                                                                                                                                                                                                                                                                                                                                               |
+| Inbox       | `GET /api/items?view=inbox\|done\|filtered&…` (filters, sort, offset cursor, per-view counts + `followUps`), `GET /api/items/follow-ups` (engaged threads, new activity first), `GET /api/items/:id` (whole thread incl. our replies, matched rules, reply window, `link`), `POST /api/items/:id/{resolve,ignore,reopen,archive,restore,hide-similar}`; `reply` arrives in Phase 4 |
+| Filters     | `GET/POST /api/filters`, `PUT/PATCH/DELETE /api/filters/:id`, `POST /api/filters/{reorder,test,apply}`, `GET/POST /api/lists`, `DELETE /api/lists/:id`                                                                                                                                                                                                                             |
+| Settings    | `GET/PUT /api/settings/:section`, `POST /api/settings/slack/test`, `POST /api/sync/:id/run`                                                                                                                                                                                                                                                                                        |
+| Connections | `GET /api/connections`, `POST /api/connections/:id/{test,disconnect}`, `GET /oauth/:platform/{start,callback}`                                                                                                                                                                                                                                                                     |
+| Live        | `GET /api/stream` (SSE, org-scoped, heartbeat every 20 s)                                                                                                                                                                                                                                                                                                                          |
+| Activity    | `GET /api/activity/{webhooks,jobs,audit}`, `POST /api/webhooks/:id/replay`                                                                                                                                                                                                                                                                                                         |
+| Webhooks    | `GET,POST /webhooks/meta`, `GET,POST /webhooks/linkedin`, `POST /webhooks/google`, `POST /slack/events`, `POST /slack/interactions`                                                                                                                                                                                                                                                |
 
 Every body is validated with `@hono/zod-validator` against `packages/core` schemas. Every request gets a `requestId` (header `x-request-id`, propagated into job data).
 
@@ -537,9 +538,9 @@ Every body is validated with `@hono/zod-validator` against `packages/core` schem
 
 shadcn components throughout: sidebar layout, data-table (TanStack v9), sheet, dialog, tabs, form, select, switch, badge, command (⌘K), sonner, skeleton, chart. Dark mode via `next-themes`. Responsive down to mobile, where the item sheet becomes full-screen.
 
-Pages: Sign-in · Inbox · Filtered · Filters (+ rule editor) · Connections · Settings (9 tabs) · Activity log · Analytics (Phase 10).
+Pages: Sign-in · Inbox (Open · Follow-ups · Done) · Item (`/items/[id]`, full view) · Filtered · Filters (+ rule editor) · Connections · Settings (9 tabs) · Activity log · Analytics (Phase 10).
 
-Inbox keyboard shortcuts: `j`/`k` move, `enter` open, `r` reply, `e` resolve, `i` ignore, `⌘K` palette. Every page has empty, loading, and error states.
+Inbox keyboard shortcuts: `j`/`k` move, `enter` open the full item page, `space` quick preview (sheet), `r` reply (full page, composer focused), `e` resolve, `i` ignore, `⌘K` palette. On the item page: `j`/`k` next/previous item of the list it came from, `esc` back. Every page has empty, loading, and error states.
 
 ---
 
@@ -611,3 +612,44 @@ After each phase: stop, update `PROGRESS.md`, and report.
 | `dashboard/` scaffold | Replace with `apps/web` (pnpm) and delete `dashboard/`                                                                                           |
 | Sign-in               | One-click: better-auth Google One Tap + "Continue with Google" fallback. Platform connections are one-click OAuth buttons (custom flows, see §5) |
 | Railway               | Not now. Local dev in Phases 1–3; deploy phase "D" when requested                                                                                |
+
+## 19. Inbox workflow changes (2026-11-13)
+
+Requested after Phase 2: interacted conversations in their own section, a better place to reply than the side sheet, "open in the app", and filtering out generic praise such as "Good content".
+
+### Follow-ups
+
+- **Thread key** (`Item.threadKey`, `packages/pipeline/src/threads.ts`): `c:<conversationId>` for DMs, `p:<accountId>:<parent ?? self>` for comments (FB/IG/YT replies are one level deep), `i:<accountId>:<externalId>` otherwise. The migration `item_threads_followups_links` backfills it.
+- **Engaged thread:** has an item that is `replied` or `resolved`.
+- **Follow-up** (`Item.isFollowUp`): set at ingest when the item is a reply to our reply or its thread is already engaged. Resolving an item (and, from Phase 4, replying) also marks newer open items in the thread as follow-ups.
+- Follow-ups **never appear in the Open tab**. The Follow-ups tab lists engaged threads: "New activity" (open follow-ups) first, then "You engaged", newest activity first. The tab badge counts open follow-ups.
+- Filters still apply to follow-ups, so a "Thank you!!" reply to our reply is archived as low-value and never resurfaces the thread.
+
+### Full item page and preview
+
+- `/items/[id]?from=<list URL>` shows the whole thread (other messages plus the replies we sent) next to a large reply composer, stacked on phones. Opening an item from any list goes here.
+- `j`/`k` walk the originating list from the React Query cache, with no extra fetch. After resolve, ignore, archive or hide, the page moves to the next item; with no list cached, it goes back to the list.
+- The side sheet is now a quick preview (`space` or the eye button). It has triage actions plus "Reply" and "Open full view", but no composer.
+- Composer drafts are kept per item in `sessionStorage` (per tab).
+
+### Open in the app
+
+- `ItemSummary.link = itemLink(...)` (`packages/core/src/links.ts`) picks the most precise link available:
+  1. the adapter's permalink (`Item.externalUrl`, e.g. FB comment `permalink_url`);
+  2. a built link: YouTube `watch?v=<video>&lc=<comment>`, LinkedIn `feed/update/<post>/?commentUrn=<urn>`;
+  3. the post (Instagram has no comment permalinks);
+  4. the inbox: Meta Business Suite inbox for FB DMs, `instagram.com/direct/inbox` for IG DMs, `business.google.com/reviews` for reviews without a location URL.
+- On phones these https links open the native app.
+- The composer's "Copy & open in <app>" copies the drafted reply and opens the link. It covers platforms or accounts we can't post to, and expired DM windows.
+- **[verify per platform phase]** the LinkedIn `commentUrn` format, the Business Suite inbox URL, and the GBP reviews URL. After Phase 4, store a permalink to the reply we sent (`Reply.externalReplyId`) the same way.
+
+### Low-value filter
+
+- **Field and rule:**
+  - New derived field `isLowValue` (`packages/core/src/filters/low-value.ts`). It is true when every word is part of a phrase on the editable **Low-value phrases** list (`ListEntry.list = low_value_phrases`), or is filler such as "bro", "so", "very", "keep", "it" or "up", with at least one phrase matched.
+  - Emoji, punctuation, @mentions and repeated letters ("sooo goood") are ignored. Text with a `?` or a link never matches.
+  - Default rule `archive_low_value` (priority 65, comments only) archives these comments and tags them `low-value`. About 90 default phrases are seeded, including romanized Hindi.
+- **"Hide similar"** (admins, comments; `POST /api/items/:id/hide-similar`):
+  - It learns a phrase from the item (its words without leading or trailing filler, at most 8 words), adds the phrase to the list, archives the item, and re-filters, so existing look-alikes leave the inbox.
+  - Undo removes the phrase and restores the item. Questions and links are refused with a reason.
+- **Later:** an AI "needs a reply?" field can join `aiSpamScore`/`aiSentiment`/`aiToxicity` once AI is configured (Phase 4).

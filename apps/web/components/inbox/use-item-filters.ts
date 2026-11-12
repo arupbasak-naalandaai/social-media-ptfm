@@ -2,70 +2,29 @@
 
 import { useCallback, useMemo } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import {
-  ITEM_STATUSES,
-  ITEM_TYPES,
-  PLATFORMS,
-  PRIORITIES,
-  type InboxView,
-  type ItemStatus,
-  type ItemType,
-  type Platform,
-  type Priority,
-} from "@inbox/core"
+import { parseFilters, parseView, type ItemFilters, type ListView } from "./list-state"
 
-export type Since = "24h" | "7d" | "30d" | "all"
-export type Sort = "newest" | "oldest" | "priority"
-
-export interface ItemFilters {
-  q: string
-  platform: Platform[]
-  type: ItemType[]
-  priority: Priority[]
-  status: ItemStatus[]
-  tag: string
-  since: Since
-  sort: Sort
-}
-
-const SINCE: readonly Since[] = ["24h", "7d", "30d", "all"]
-const SORTS: readonly Sort[] = ["newest", "oldest", "priority"]
-
-function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
-  if (!raw) return []
-  return raw.split(",").filter((v): v is T => (allowed as readonly string[]).includes(v))
-}
+export type { ItemFilters, ListView, Since, Sort } from "./list-state"
 
 /** Filter + view + open-item state, stored in the URL so views are shareable and survive reloads. */
-export function useItemFilters(defaultView: InboxView) {
+export function useItemFilters(defaultView: ListView) {
   const params = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
 
-  const view: InboxView = (() => {
-    const v = params.get("view")
-    return v === "inbox" || v === "done" || v === "filtered" ? v : defaultView
-  })()
+  const view = parseView(params, defaultView)
+  const filters: ItemFilters = useMemo(() => parseFilters(params), [params])
 
-  const filters: ItemFilters = useMemo(
-    () => ({
-      q: params.get("q") ?? "",
-      platform: list(params.get("platform"), PLATFORMS),
-      type: list(params.get("type"), ITEM_TYPES),
-      priority: list(params.get("priority"), PRIORITIES),
-      status: list(params.get("status"), ITEM_STATUSES),
-      tag: params.get("tag") ?? "",
-      since: (SINCE as readonly string[]).includes(params.get("since") ?? "")
-        ? (params.get("since") as Since)
-        : "all",
-      sort: (SORTS as readonly string[]).includes(params.get("sort") ?? "")
-        ? (params.get("sort") as Sort)
-        : "newest",
-    }),
-    [params],
-  )
-
+  /** Item shown in the quick-preview sheet. */
   const openItemId = params.get("item")
+
+  /** This list's URL without the preview param: where the full item page links back to. */
+  const listHref = useMemo(() => {
+    const next = new URLSearchParams(params.toString())
+    next.delete("item")
+    const qs = next.toString()
+    return qs ? `${pathname}?${qs}` : pathname
+  }, [params, pathname])
 
   const update = useCallback(
     (patch: Record<string, string | string[] | null>) => {
@@ -110,5 +69,5 @@ export function useItemFilters(defaultView: InboxView) {
     [update],
   )
 
-  return { view, filters, openItemId, update, hasFilters, clearFilters }
+  return { view, filters, openItemId, listHref, update, hasFilters, clearFilters }
 }

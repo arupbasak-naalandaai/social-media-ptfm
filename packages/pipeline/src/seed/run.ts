@@ -11,6 +11,7 @@
  */
 import path from "node:path"
 import {
+  DEFAULT_LOW_VALUE_PHRASES,
   DEFAULT_RULES,
   DEFAULT_SPAM_KEYWORDS,
   DEFAULT_TRUSTED_DOMAINS,
@@ -20,6 +21,7 @@ import { createLogger } from "@inbox/core/logger"
 import { createPrismaClient, type Prisma } from "@inbox/db"
 import { loadFilterSetup } from "../context"
 import { ingestNormalizedItem } from "../ingest"
+import { markLaterItemsAsFollowUps } from "../threads"
 import { buildSeedItems, SEED_ACCOUNTS } from "./fixtures"
 
 try {
@@ -41,6 +43,11 @@ const SAMPLE_LISTS: Omit<ListEntry, "platform">[] = [
   ...DEFAULT_TRUSTED_DOMAINS.map((value) => ({
     list: "trusted_domains" as const,
     kind: "domain" as const,
+    value,
+  })),
+  ...DEFAULT_LOW_VALUE_PHRASES.map((value) => ({
+    list: "low_value_phrases" as const,
+    kind: "keyword" as const,
     value,
   })),
   { list: "blocklist", kind: "author_handle", value: "known.troll" },
@@ -148,8 +155,16 @@ async function main() {
 
   // 5. Items through the real pipeline.
   const setup = await loadFilterSetup(prisma, organizationId, logger)
-  const counts = { created: 0, dropped: 0, duplicate: 0, updated: 0, shown: 0, filtered: 0 }
-  for (const { accountKey, item } of buildSeedItems()) {
+  const counts = {
+    created: 0,
+    dropped: 0,
+    duplicate: 0,
+    updated: 0,
+    shown: 0,
+    filtered: 0,
+    answered: 0,
+  }
+  for (const { accountKey, item, ourReply } of buildSeedItems()) {
     const res = await ingestNormalizedItem(prisma, {
       organizationId,
       platformAccountId: accountIds.get(accountKey)!,
@@ -158,6 +173,34 @@ async function main() {
     })
     counts[res.outcome]++
     if (res.outcome === "created") counts[res.result.decision === "show" ? "shown" : "filtered"]++
+    // Items we "already answered": later items in their thread become follow-ups.
+    if (res.outcome === "created" && ourReply) {
+      const answeredAt = new Date(item.receivedAt.getTime() + 2 * 60_000)
+      const updated = await prisma.item.update({
+        where: { id: res.itemId },
+        data: {
+          status: ourReply.status,
+          resolvedAt: answeredAt,
+          manualOverride: true,
+        },
+        select: { id: true, organizationId: true, threadKey: true, receivedAt: true },
+      })
+      if (ourReply.text) {
+        await prisma.reply.create({
+          data: {
+            organizationId,
+            itemId: res.itemId,
+            text: ourReply.text,
+            source: "manual_dashboard",
+            status: "sent",
+            sentAt: answeredAt,
+            idempotencyKey: `seed-${item.externalId}`,
+          },
+        })
+      }
+      await markLaterItemsAsFollowUps(prisma, updated)
+      counts.answered++
+    }
   }
 
   logger.info(

@@ -188,6 +188,14 @@ export const FIELD_DEFS: Record<ConditionField, FieldDef> = {
     type: "boolean",
     operators: BOOL_OPS,
   },
+  isLowValue: {
+    field: "isLowValue",
+    label: "Low-value (generic praise)",
+    description:
+      "Only generic praise or thanks from the Low-value phrases list, like “Great video, keep it up 👏”. Never true for questions or links.",
+    type: "boolean",
+    operators: BOOL_OPS,
+  },
   postId: {
     field: "postId",
     label: "Post / video ID",

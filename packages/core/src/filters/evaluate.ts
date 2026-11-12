@@ -59,6 +59,8 @@ export function resolveFieldValue(field: ConditionField, env: EvalEnv): Resolved
       return known(derived.isEmojiOnly)
     case "isMentionOnly":
       return known(derived.isMentionOnly)
+    case "isLowValue":
+      return known(derived.isLowValue)
     case "postAgeDays":
       return known(derived.postAgeDays)
     case "receivedHour":

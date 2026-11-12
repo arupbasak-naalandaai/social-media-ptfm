@@ -20,14 +20,28 @@ import {
   type Platform,
   type Priority,
 } from "./filters/types"
+import type { ItemLink } from "./links"
 
-/** Statuses each inbox view shows by default. */
+/**
+ * Statuses each inbox view shows by default. The inbox view also leaves out follow-ups
+ * (new activity in threads you already engaged with): those live in the Follow-ups tab.
+ */
 export const VIEW_STATUSES = {
   inbox: ["new", "pending", "failed"],
   done: ["replied", "resolved", "ignored"],
   filtered: ["filtered", "archived"],
 } as const satisfies Record<string, readonly ItemStatus[]>
 export type InboxView = keyof typeof VIEW_STATUSES
+
+/** Item statuses that need someone's attention. */
+export const OPEN_STATUSES = VIEW_STATUSES.inbox
+/** Statuses that mean "we engaged with this thread" (it shows up under Follow-ups). */
+export const ENGAGED_STATUSES = ["replied", "resolved"] as const satisfies readonly ItemStatus[]
+
+export type ItemCounts = Record<InboxView, number> & {
+  /** Open items in threads you engaged with (new activity under Follow-ups). */
+  followUps: number
+}
 
 /** Hours a business may reply to a DM after the customer's last message (platform policy). */
 export const DM_REPLY_WINDOW_HOURS: Partial<Record<Platform, number>> = {
@@ -78,12 +92,43 @@ export interface ItemSummary {
   manualOverride: boolean
   conversationId: string | null
   accountName: string
+  /** New activity in a thread you already replied to or resolved (shown under Follow-ups). */
+  isFollowUp: boolean
+  /** "Open in <platform>" link, or null when the platform offers none. */
+  link: ItemLink | null
 }
 
 export interface ItemListResponse {
   items: ItemSummary[]
   nextCursor: string | null
-  counts: Record<InboxView, number>
+  counts: ItemCounts
+}
+
+// ─── Follow-ups ───────────────────────────────────────────────────────────────
+
+export const followUpListQuerySchema = itemListQuerySchema
+  .pick({ platform: true, type: true, q: true, since: true, cursor: true })
+  .extend({ limit: z.coerce.number().int().min(1).max(100).default(30) })
+export type FollowUpListQuery = z.input<typeof followUpListQuerySchema>
+
+/** One conversation or comment thread you engaged with. */
+export interface FollowUpThread {
+  threadKey: string
+  /** The item to open: the newest open follow-up if there is one, else the newest item. */
+  item: ItemSummary
+  /** Items stored in this thread (filtered/archived ones excluded). */
+  itemCount: number
+  /** Open follow-up items: the person wrote again after you engaged. */
+  newCount: number
+  /** When you last replied to or resolved something in this thread. */
+  lastEngagedAt: string | null
+  lastActivityAt: string
+}
+
+export interface FollowUpListResponse {
+  threads: FollowUpThread[]
+  nextCursor: string | null
+  counts: ItemCounts
 }
 
 export interface MatchedRuleRef {
@@ -106,8 +151,11 @@ export interface ItemDetail extends ItemSummary {
   requireApproval: boolean
   resolvedAt: string | null
   matchedRules: MatchedRuleRef[]
-  /** Other messages in the same DM thread, oldest first (includes this item). */
-  thread: Pick<ItemSummary, "id" | "text" | "receivedAt" | "authorName" | "eventKind" | "status">[]
+  /**
+   * The whole thread, oldest first: this item, the other stored items of the same DM
+   * conversation or comment thread, and the replies we sent.
+   */
+  thread: ThreadEntry[]
   replyWindow: ReplyWindow | null
   aiDrafts: { id: string; text: string; model: string; createdAt: string }[]
   replies: {
@@ -122,7 +170,36 @@ export interface ItemDetail extends ItemSummary {
   canReply: boolean
 }
 
+export interface ThreadEntry {
+  id: string
+  kind: "item" | "reply"
+  text: string | null
+  at: string
+  authorName: string | null
+  eventKind: string
+  /** Item status, or a reply's send status (queued, sent, failed…). */
+  status: string
+  /** Our side of the conversation (a reply we sent). */
+  ours: boolean
+}
+
 export const restoreItemSchema = z.object({ addToAllowlist: z.boolean().default(false) })
+
+/** POST /api/items/:id/hide-similar */
+export interface HideSimilarResponse {
+  item: ItemSummary
+  /** The phrase added to the Low-value phrases list. */
+  phrase: string
+  /** The list entry (for Undo), or null when the phrase was already listed. */
+  entryId: string | null
+}
+
+export const LEARN_PHRASE_ERRORS = {
+  empty: "This item has no words to learn from.",
+  question: "Questions are never hidden as low-value.",
+  link: "Comments with links are handled by the spam rule, not as low-value.",
+  too_long: "Too long to learn from. Add a short phrase under Filters → Lists instead.",
+} as const
 
 // ─── Filters ──────────────────────────────────────────────────────────────────
 
@@ -223,6 +300,7 @@ export const LIST_KINDS_BY_LIST: Record<ListName, readonly ListKind[]> = {
   allowlist: ["author_handle", "author_id"],
   spam_keywords: ["keyword"],
   trusted_domains: ["domain"],
+  low_value_phrases: ["keyword"],
 }
 
 // ─── Live events (SSE) ────────────────────────────────────────────────────────

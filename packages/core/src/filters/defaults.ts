@@ -231,6 +231,20 @@ export const DEFAULT_RULES: DefaultRuleDef[] = [
       ]),
   ),
   rule(
+    "archive_low_value",
+    {
+      name: "Archive low-value comments",
+      description:
+        "Generic praise and thanks like “Good content bro, keep it up 👏”. Uses the Low-value phrases list (“Hide similar” adds to it). Questions and links never match.",
+      enabled: true,
+      priority: 65,
+      platforms: "all",
+      itemTypes: ["comment"],
+      actions: [{ type: "archive" }, { type: "addTag", value: "low-value" }],
+    },
+    ({ cond, group }) => group("and", [cond({ field: "isLowValue", operator: "isTrue" })]),
+  ),
+  rule(
     "archive_tag_only",
     {
       name: "Archive tag-only comments",

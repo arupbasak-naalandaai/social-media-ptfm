@@ -123,6 +123,23 @@
 - **Replies and AI drafts:** sending is disabled until platforms connect (Phase 4+), and AI drafts are a placeholder.
 - **Shared test database:** the integration tests truncate `TEST_DATABASE_URL`. Never point it at the dev database.
 
+## Inbox workflow changes (2026-11-13)
+
+Requested after Phase 2: a separate section for people you already interacted with, a better reply surface than the sheet, open-in-app, and hiding generic praise. Design in PLAN §19.
+
+| Check            | Result                                                                                                                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Follow-ups       | ✅ Later activity in a resolved/replied thread leaves Open and shows under Follow-ups ("New activity" first). API integration test + seed (FB DM, IG comment thread, YT reply-to-our-reply)                  |
+| Full item page   | ✅ `/items/[id]`: thread incl. our replies, composer, `j`/`k` within the source list, auto-advance after resolve. Checked in headless Chrome at 1400px and 390px (no horizontal scroll, no console errors)   |
+| Quick preview    | ✅ Space / eye button opens the sheet; Reply there goes to the full page                                                                                                                                     |
+| Open in app      | ✅ `link` on every item (YT comment, IG post, FB/IG inbox, Google reviews); "Copy & open in <app>" in the composer. 9 unit tests                                                                             |
+| Low-value filter | ✅ "Good content bro, keep it up 👏", "Thanks for sharing!", "Great video sir, very informative 🙏" archived; questions/links/substantive praise kept. "Hide similar" learns + re-filters (integration test) |
+| Whole repo       | ✅ lint, typecheck, 559 tests (core 522, api 30, auth 7)                                                                                                                                                     |
+
+- **Migration** `item_threads_followups_links`: adds `Item.threadKey`, `isFollowUp` and `externalUrl`, with a backfill. Run `pnpm db:migrate` locally. Run `pnpm db:seed` to add the new rule and phrase list to an existing org (it only creates missing ones).
+- **Test DB:** apply migrations to `TEST_DATABASE_URL` too (`DATABASE_URL=$TEST_DATABASE_URL pnpm --filter @inbox/db migrate:deploy`).
+- **Not changed:** the existing "≤ 2 words" rule still hides one-word questions such as "When?" on comments. Consider exempting `?` or `isReplyToOurReply`.
+
 ## Open questions
 
 - None blocking Phase 3.
@@ -130,26 +147,30 @@
 
 ## Decisions log
 
-| Date       | Decision                                                                                                                                  |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-11-12 | Prisma pinned to 7.10.1 (8.x is RC and outside better-auth's peer range)                                                                  |
-| 2026-11-12 | TypeScript pinned to 6.0.3 (typescript-eslint does not support 7.x yet)                                                                   |
-| 2026-11-12 | TanStack Table v9 (matches the current shadcn data-table guide)                                                                           |
-| 2026-11-12 | Live fan-out via Postgres LISTEN/NOTIFY: no Redis                                                                                         |
-| 2026-11-12 | Blocklist/Allowlist/keyword lists stored in one `ListEntry` table                                                                         |
-| 2026-11-12 | Platform connections use custom one-click OAuth flows, not better-auth `linkSocial` (org-owned, derived Page tokens, IG Unified Login)    |
-| 2026-11-12 | Sign-in: better-auth Google One Tap plugin + "Continue with Google" fallback                                                              |
-| 2026-11-12 | AI providers: Claude, ChatGPT, Gemini via Vercel AI SDK (`@ai-sdk/anthropic`/`openai`/`google`)                                           |
-| 2026-11-12 | Slack deferred (Phase 8); Railway deploy deferred (Phase D); no custom domain yet                                                         |
-| 2026-11-12 | MVP is one org + one user; organization plugin and roles kept for later expansion                                                         |
-| 2026-11-12 | `dashboard/` (bun scaffold) replaced by `apps/web` on pnpm                                                                                |
-| 2026-11-12 | ESLint 9.39 (not 10) until eslint-config-next's plugins support 10                                                                        |
-| 2026-11-12 | shadcn `base-nova` style (Base UI primitives), the CLI default                                                                            |
-| 2026-11-12 | Owners always pass the sign-in check; first-owner bootstrap serialized with a Postgres advisory lock; optional `BOOTSTRAP_OWNER_EMAILS`   |
-| 2026-11-12 | Web reads the session via `'use cache: private'` `getCurrentMe()` → api `/api/me`; `proxy.ts` is an optimistic cookie check only          |
-| 2026-11-12 | `DEV_AUTH_BYPASS` local preview mode (virtual user, no DB writes, refused in production/Railway), requested to check the UI without login |
-| 2026-11-12 | `resolved` status (done without reply); `filtered` (rule) vs `archived` (person)                                                          |
-| 2026-11-12 | First sign-in claims an ownerless (seeded) org as owner                                                                                   |
-| 2026-11-12 | Re-filter touches only `new`/`filtered` items without `manualOverride`; stored items are never deleted by a later drop rule               |
-| 2026-11-12 | `@inbox/pipeline` package for DB-aware pipeline code shared by api, worker and seed                                                       |
-| 2026-11-12 | React Query for client data; SSE invalidates query prefixes                                                                               |
+| Date       | Decision                                                                                                                                          |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-12 | Prisma pinned to 7.10.1 (8.x is RC and outside better-auth's peer range)                                                                          |
+| 2026-11-12 | TypeScript pinned to 6.0.3 (typescript-eslint does not support 7.x yet)                                                                           |
+| 2026-11-12 | TanStack Table v9 (matches the current shadcn data-table guide)                                                                                   |
+| 2026-11-12 | Live fan-out via Postgres LISTEN/NOTIFY: no Redis                                                                                                 |
+| 2026-11-12 | Blocklist/Allowlist/keyword lists stored in one `ListEntry` table                                                                                 |
+| 2026-11-12 | Platform connections use custom one-click OAuth flows, not better-auth `linkSocial` (org-owned, derived Page tokens, IG Unified Login)            |
+| 2026-11-12 | Sign-in: better-auth Google One Tap plugin + "Continue with Google" fallback                                                                      |
+| 2026-11-12 | AI providers: Claude, ChatGPT, Gemini via Vercel AI SDK (`@ai-sdk/anthropic`/`openai`/`google`)                                                   |
+| 2026-11-12 | Slack deferred (Phase 8); Railway deploy deferred (Phase D); no custom domain yet                                                                 |
+| 2026-11-12 | MVP is one org + one user; organization plugin and roles kept for later expansion                                                                 |
+| 2026-11-12 | `dashboard/` (bun scaffold) replaced by `apps/web` on pnpm                                                                                        |
+| 2026-11-12 | ESLint 9.39 (not 10) until eslint-config-next's plugins support 10                                                                                |
+| 2026-11-12 | shadcn `base-nova` style (Base UI primitives), the CLI default                                                                                    |
+| 2026-11-12 | Owners always pass the sign-in check; first-owner bootstrap serialized with a Postgres advisory lock; optional `BOOTSTRAP_OWNER_EMAILS`           |
+| 2026-11-12 | Web reads the session via `'use cache: private'` `getCurrentMe()` → api `/api/me`; `proxy.ts` is an optimistic cookie check only                  |
+| 2026-11-12 | `DEV_AUTH_BYPASS` local preview mode (virtual user, no DB writes, refused in production/Railway), requested to check the UI without login         |
+| 2026-11-12 | `resolved` status (done without reply); `filtered` (rule) vs `archived` (person)                                                                  |
+| 2026-11-12 | First sign-in claims an ownerless (seeded) org as owner                                                                                           |
+| 2026-11-12 | Re-filter touches only `new`/`filtered` items without `manualOverride`; stored items are never deleted by a later drop rule                       |
+| 2026-11-12 | `@inbox/pipeline` package for DB-aware pipeline code shared by api, worker and seed                                                               |
+| 2026-11-12 | React Query for client data; SSE invalidates query prefixes                                                                                       |
+| 2026-11-13 | Follow-ups: threads we replied to/resolved get their own tab; later items in them skip the Open tab (`Item.threadKey`, `isFollowUp`)              |
+| 2026-11-13 | Opening an item goes to a full page (`/items/[id]`); the side sheet is a quick preview without a composer                                         |
+| 2026-11-13 | "Open in <app>" links built per platform (`itemLink`), adapter permalinks preferred; "Copy & open" for replying in the native app                 |
+| 2026-11-13 | Low-value filter: `isLowValue` field + editable Low-value phrases list + `archive_low_value` default rule; "Hide similar" learns phrases (admins) |

@@ -4,6 +4,7 @@ import { useInfiniteQuery } from "@tanstack/react-query"
 import { AnimatePresence, MotionConfig } from "motion/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { AlertTriangle, CheckCheck, Filter, Inbox, ListFilter, SearchX } from "lucide-react"
 import {
   VIEW_STATUSES,
@@ -13,46 +14,63 @@ import {
   type ItemSummary,
 } from "@inbox/core"
 import { EmptyState } from "@/components/app/empty-state"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, ApiError } from "@/lib/api"
 import { qk } from "@/lib/query-keys"
+import { FollowUpList } from "./follow-up-list"
 import { ItemRow } from "./item-row"
+import { ItemRowsSkeleton } from "./item-list-skeleton"
 import { ItemSheet } from "./item-sheet"
+import { itemHref, listQuery, type ListView } from "./list-state"
 import { RestoreDialog, type RestoreTarget } from "./restore-dialog"
 import { Toolbar } from "./toolbar"
 import { RESULT_STATUS, useItemAction, type ItemAction } from "./use-item-actions"
-import { useItemFilters, type ItemFilters } from "./use-item-filters"
+import { useHideSimilar } from "./use-hide-similar"
+import { useItemFilters } from "./use-item-filters"
 import { useInboxShortcuts } from "./use-shortcuts"
+import { ViewTabs } from "./view-tabs"
 
 const PAGE_SIZE = 50
 
-function listQuery(view: InboxView, f: ItemFilters) {
-  return {
-    view,
-    q: f.q || undefined,
-    platform: f.platform,
-    type: f.type,
-    priority: f.priority,
-    status: f.status,
-    tag: f.tag || undefined,
-    since: f.since,
-    sort: f.sort,
-  }
+type ListState = ReturnType<typeof useItemFilters>
+
+/**
+ * Inbox (Open · Follow-ups · Done) and Filtered. All state that matters (view, filters,
+ * previewed item) lives in the URL.
+ */
+export function ItemList({ defaultView, showTabs }: { defaultView: ListView; showTabs: boolean }) {
+  const state = useItemFilters(defaultView)
+  const tabs = (counts: ItemListResponse["counts"] | undefined) =>
+    showTabs ? (
+      <ViewTabs
+        view={state.view}
+        counts={counts}
+        onChange={(v) => state.update({ view: v === "inbox" ? null : v, status: null, item: null })}
+      />
+    ) : null
+
+  if (state.view === "followups") return <FollowUpList state={state} tabs={tabs} />
+  return <ItemListView state={state} view={state.view} tabs={tabs} />
 }
 
 /**
- * Inbox / Done / Filtered list: toolbar, table, item sheet, restore dialog and shortcuts.
- * All state that matters (view, filters, open item) lives in the URL.
+ * A flat list of items: toolbar, cards, quick-preview sheet, restore dialog and shortcuts.
+ * Opening an item goes to its full page; Space previews it in the sheet.
  */
-export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; showTabs: boolean }) {
-  const { view, filters, openItemId, update, hasFilters, clearFilters } =
-    useItemFilters(defaultView)
+function ItemListView({
+  state,
+  view,
+  tabs,
+}: {
+  state: ListState
+  view: InboxView
+  tabs: (counts: ItemListResponse["counts"] | undefined) => React.ReactNode
+}) {
+  const { filters, openItemId, listHref, update, hasFilters, clearFilters } = state
+  const router = useRouter()
   const params = useMemo(() => listQuery(view, filters), [view, filters])
 
   const query = useInfiniteQuery({
@@ -77,20 +95,30 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
   const now = query.dataUpdatedAt
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [focusReplyToken, setFocusReplyToken] = useState(0)
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null)
   const action = useItemAction()
 
   const activeId = openItemId ?? selectedId
   const activeIndex = activeId ? items.findIndex((i) => i.id === activeId) : -1
 
-  const openItem = useCallback((id: string | null) => update({ item: id }), [update])
-  const openFromList = useCallback(
+  const fullHref = useCallback(
+    (id: string, opts?: { reply?: boolean }) => itemHref(id, listHref, opts),
+    [listHref],
+  )
+  const preview = useCallback((id: string | null) => update({ item: id }), [update])
+  const openFull = useCallback(
+    (id: string, opts?: { reply?: boolean }) => {
+      setSelectedId(id)
+      router.push(fullHref(id, opts))
+    },
+    [router, fullHref],
+  )
+  const onPreview = useCallback(
     (id: string) => {
       setSelectedId(id)
-      openItem(id)
+      preview(id)
     },
-    [openItem],
+    [preview],
   )
 
   const select = useCallback(
@@ -98,10 +126,10 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
       const item = items[Math.max(0, Math.min(items.length - 1, index))]
       if (!item) return
       setSelectedId(item.id)
-      if (openItemId) openItem(item.id)
+      if (openItemId) preview(item.id)
       document.querySelector(`[data-item-id="${item.id}"]`)?.scrollIntoView({ block: "nearest" })
     },
-    [items, openItemId, openItem],
+    [items, openItemId, preview],
   )
 
   const allowedStatuses: readonly ItemStatus[] = filters.status.length
@@ -115,7 +143,7 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
         const idx = items.findIndex((i) => i.id === id)
         const neighbour = items[idx + 1] ?? items[idx - 1] ?? null
         setSelectedId(neighbour?.id ?? null)
-        if (openItemId === id) openItem(neighbour?.id ?? null)
+        if (openItemId === id) preview(neighbour?.id ?? null)
       }
       action.mutate({
         id,
@@ -123,8 +151,14 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
         ...(addToAllowlist !== undefined ? { addToAllowlist } : {}),
       })
     },
-    [action, allowedStatuses, items, openItemId, openItem],
+    [action, allowedStatuses, items, openItemId, preview],
   )
+
+  const hideSimilar = useHideSimilar({
+    onHidden: (id) => {
+      if (openItemId === id) preview(null)
+    },
+  })
 
   const current: ItemSummary | undefined = activeIndex >= 0 ? items[activeIndex] : undefined
   const isHiddenView = view === "filtered"
@@ -132,11 +166,11 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
   useInboxShortcuts({
     next: () => select(activeIndex < 0 ? 0 : activeIndex + 1),
     prev: () => select(activeIndex < 0 ? 0 : activeIndex - 1),
-    open: () => current && openItem(current.id),
+    open: () => current && openFull(current.id),
+    preview: () => current && (openItemId === current.id ? preview(null) : onPreview(current.id)),
     reply: () => {
       if (!current || isHiddenView) return
-      openItem(current.id)
-      setFocusReplyToken((t) => t + 1)
+      openFull(current.id, { reply: true })
     },
     resolve: () => current && !isHiddenView && runAction(current.id, "resolve"),
     ignore: () => current && !isHiddenView && runAction(current.id, "ignore"),
@@ -153,14 +187,8 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
     (id: string, act: ItemAction) => runActionRef.current(id, act),
     [],
   )
-  const onRowReply = useCallback(
-    (id: string) => {
-      setSelectedId(id)
-      openItem(id)
-      setFocusReplyToken((t) => t + 1)
-    },
-    [openItem],
-  )
+  const onRowOpen = useCallback((id: string) => openFull(id), [openFull])
+  const onRowReply = useCallback((id: string) => openFull(id, { reply: true }), [openFull])
 
   // Infinite scroll: fetch the next page when the sentinel below the list nears the viewport.
   // Re-observing after every page means a short page that leaves the sentinel visible
@@ -181,26 +209,8 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, items.length])
 
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      {showTabs ? (
-        <Tabs
-          value={view}
-          onValueChange={(v) =>
-            update({ view: v === "inbox" ? null : String(v), status: null, item: null })
-          }
-        >
-          <TabsList>
-            <TabsTrigger value="inbox">
-              Open
-              {counts ? <CountBadge n={counts.inbox} /> : null}
-            </TabsTrigger>
-            <TabsTrigger value="done">
-              Done
-              {counts ? <CountBadge n={counts.done} /> : null}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      ) : null}
+    <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4">
+      {tabs(counts)}
 
       <Toolbar
         view={view}
@@ -212,7 +222,7 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
       />
 
       {query.isPending ? (
-        <LoadingCards />
+        <ItemRowsSkeleton />
       ) : query.isError ? (
         <EmptyState
           icon={AlertTriangle}
@@ -240,7 +250,8 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
                     selected={item.id === activeId}
                     filteredView={isHiddenView}
                     now={now}
-                    onOpen={openFromList}
+                    onOpen={onRowOpen}
+                    onPreview={onPreview}
                     onRestore={onRestore}
                     onAction={onRowAction}
                     onReply={onRowReply}
@@ -256,13 +267,12 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <div className="hidden items-center gap-1.5 md:flex" aria-label="Keyboard shortcuts">
           <Kbd>j</Kbd>
-          <Kbd>k</Kbd> move · <Kbd>Enter</Kbd> open ·{" "}
+          <Kbd>k</Kbd> move · <Kbd>Enter</Kbd> open · <Kbd>Space</Kbd> preview ·{" "}
           {isHiddenView ? null : (
             <>
-              <Kbd>r</Kbd> reply · <Kbd>e</Kbd> resolve · <Kbd>i</Kbd> ignore ·{" "}
+              <Kbd>r</Kbd> reply · <Kbd>e</Kbd> resolve · <Kbd>i</Kbd> ignore
             </>
           )}
-          <Kbd>Esc</Kbd> close
         </div>
         <div className="flex items-center gap-3" aria-live="polite">
           {isFetchingNextPage ? (
@@ -280,11 +290,12 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
       <ItemSheet
         itemId={openItemId}
         onOpenChange={(open) => {
-          if (!open) openItem(null)
+          if (!open) preview(null)
         }}
-        focusReplyToken={focusReplyToken}
+        fullHref={fullHref}
         onAction={runAction}
         onRestore={onRestore}
+        onHideSimilar={(id) => hideSimilar.mutate(id)}
       />
       <RestoreDialog
         target={restoreTarget}
@@ -294,34 +305,6 @@ export function ItemList({ defaultView, showTabs }: { defaultView: InboxView; sh
           runAction(id, "restore", addToAllowlist)
         }}
       />
-    </div>
-  )
-}
-
-function CountBadge({ n }: { n: number }) {
-  return (
-    <Badge variant="secondary" className="h-4 min-w-4 rounded-full px-1 text-[10px] tabular-nums">
-      {n}
-    </Badge>
-  )
-}
-
-function LoadingCards() {
-  return (
-    <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading items">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex gap-3 rounded-xl border p-4">
-          <Skeleton className="size-9 shrink-0 rounded-full" />
-          <div className="flex-1 space-y-2">
-            <div className="flex justify-between">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-3 w-10" />
-            </div>
-            <Skeleton className="h-3.5 w-11/12" />
-            <Skeleton className="h-3.5 w-2/3" />
-          </div>
-        </div>
-      ))}
     </div>
   )
 }
@@ -362,7 +345,7 @@ function ListEmpty({
       <EmptyState
         icon={ListFilter}
         title="Nothing filtered"
-        description="Items your filter rules hide (spam, emoji-only comments, blocklisted authors…) show up here with the rule that hid them."
+        description="Items your filter rules hide (spam, low-value praise, emoji-only comments, blocklisted authors…) show up here with the rule that hid them."
       >
         <Button variant="outline" nativeButton={false} render={<Link href="/filters" />}>
           <Filter /> Review filter rules
@@ -374,7 +357,7 @@ function ListEmpty({
     <EmptyState
       icon={Inbox}
       title="Inbox zero"
-      description="Nothing needs a reply right now. New reviews, comments and DMs appear here as they arrive."
+      description="Nothing new needs a reply. Replies from people you already talked to land in Follow-ups."
     />
   )
 }
