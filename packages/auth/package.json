@@ -1,0 +1,28 @@
+{
+  "name": "@inbox/auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "schema:generate": "auth generate --config src/cli-config.ts --output ../db/prisma/schema.prisma --yes",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@inbox/core": "workspace:*",
+    "@inbox/db": "workspace:*",
+    "better-auth": "1.7.22"
+  },
+  "devDependencies": {
+    "@inbox/config": "workspace:*",
+    "@types/node": "~24.19.2",
+    "auth": "1.7.22",
+    "eslint": "~9.39.5",
+    "typescript": "6.0.3",
+    "vitest": "~5.1.0"
+  }
+}

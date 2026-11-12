@@ -1,0 +1,27 @@
+{
+  "name": "@inbox/pipeline",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "seed": "tsx src/seed/run.ts"
+  },
+  "dependencies": {
+    "@inbox/core": "workspace:*",
+    "@inbox/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@inbox/config": "workspace:*",
+    "@types/node": "~24.19.2",
+    "eslint": "~9.39.5",
+    "typescript": "6.0.3",
+    "vitest": "~5.1.0",
+    "tsx": "~4.23.15"
+  }
+}

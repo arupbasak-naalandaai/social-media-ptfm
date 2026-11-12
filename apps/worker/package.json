@@ -1,0 +1,33 @@
+{
+  "name": "@inbox/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "build": "tsdown",
+    "start": "node dist/index.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "~2.1.8",
+    "@inbox/core": "workspace:*",
+    "@inbox/db": "workspace:*",
+    "@inbox/pipeline": "workspace:*",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "hono": "~4.13.18",
+    "pg-boss": "~12.38.2",
+    "pino": "~10.4.0",
+    "zod": "~4.6.7"
+  },
+  "devDependencies": {
+    "@inbox/config": "workspace:*",
+    "@types/node": "~24.19.2",
+    "eslint": "~9.39.5",
+    "tsdown": "~0.23.7",
+    "tsx": "~4.23.15",
+    "typescript": "6.0.3"
+  }
+}
