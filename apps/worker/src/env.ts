@@ -11,6 +11,8 @@ const envSchema = z.object({
       (k) => Buffer.from(k, "base64").length === 32,
       "ENCRYPTION_KEY must be 32 bytes, base64",
     ),
+  /** Comma-separated previous keys, still accepted for decryption after a rotation. */
+  ENCRYPTION_KEYS_PREVIOUS: z.string().default(""),
 })
 
 export type WorkerEnv = z.infer<typeof envSchema> & { port: number }

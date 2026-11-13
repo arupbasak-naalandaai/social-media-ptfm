@@ -45,7 +45,12 @@ export async function ingestNormalizedItem(
     if (item.eventKind === "edited") {
       await prisma.item.update({
         where: { id: existing.id },
-        data: { text: item.text, platformUpdatedAt: item.platformUpdatedAt ?? item.receivedAt },
+        data: {
+          text: item.text,
+          // Reviews can change their star rating when edited.
+          ...(item.rating !== null ? { rating: item.rating } : {}),
+          platformUpdatedAt: item.platformUpdatedAt ?? item.receivedAt,
+        },
       })
       return { outcome: "updated", itemId: existing.id }
     }

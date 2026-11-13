@@ -18,6 +18,10 @@ function toStreamEvent(e: InboxEvent): InboxStreamEvent {
     case "rules.changed":
     case "lists.changed":
       return { type: e.type }
+    case "sync.changed":
+      return { type: e.type, syncStateIds: e.syncStateIds }
+    case "settings.changed":
+      return { type: e.type, section: e.section, version: e.version }
   }
 }
 

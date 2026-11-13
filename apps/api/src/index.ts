@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server"
 import { createAuth } from "@inbox/auth"
+import { createKeyring } from "@inbox/core/crypto"
 import { createLogger } from "@inbox/core/logger"
 import { getPrisma } from "@inbox/db"
 import { createApp } from "./app"
@@ -43,6 +44,8 @@ const app = createApp({
   prisma,
   jobs,
   events,
+  keyring: createKeyring(env.ENCRYPTION_KEY, env.ENCRYPTION_KEYS_PREVIOUS),
+  urls: { apiPublicUrl: env.API_PUBLIC_URL, webUrl: env.WEB_URL },
   auth: {
     handler: (req) => auth.handler(req),
     getSession: (headers) => auth.api.getSession({ headers }),

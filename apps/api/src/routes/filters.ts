@@ -22,7 +22,7 @@ import {
 } from "@inbox/core"
 import type { FilterRule as FilterRuleRow, Prisma, PrismaClient } from "@inbox/db"
 import { itemToFilterInput, loadFilterSetup, notifyInbox, ruleFromRow } from "@inbox/pipeline"
-import type { JobSender } from "../lib/jobs"
+import { autoRefilterEnabled, type JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
 import { requireAuth, requireRole } from "../middleware/session"
 import type { AppEnv } from "../types"
@@ -106,8 +106,11 @@ export function filterRoutes({ prisma, jobs }: FilterRouteDeps) {
       },
     })
     await notifyInbox(prisma, { type: "rules.changed", organizationId })
-    // Re-run the rules over stored items so the inbox reflects the change.
-    await jobs.enqueueRefilter(organizationId, requestId)
+    // Re-run the rules over stored items so the inbox reflects the change
+    // (unless Settings → Filters turned that off: then "Apply to existing items" does it).
+    if (await autoRefilterEnabled(prisma, organizationId)) {
+      await jobs.enqueueRefilter(organizationId, requestId)
+    }
   }
 
   return (

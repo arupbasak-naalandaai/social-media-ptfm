@@ -4,6 +4,7 @@
  * Building blocks shared by the quick-preview sheet and the full item page.
  */
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
 import { toast } from "sonner"
 import {
@@ -16,6 +17,8 @@ import {
   ExternalLink,
   EyeOff,
   MessageSquareOff,
+  Loader2,
+  RefreshCw,
   RotateCcw,
   Send,
   Sparkles,
@@ -27,6 +30,7 @@ import {
   type ItemDetail,
   type ItemLink,
   type ItemStatus,
+  type ReplyQueuedResponse,
   type ThreadEntry,
 } from "@inbox/core"
 import { useIsAdmin } from "@/components/app/me-context"
@@ -36,6 +40,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Textarea } from "@/components/ui/textarea"
+import { api } from "@/lib/api"
+import { qk } from "@/lib/query-keys"
 import { absoluteTime, relativeTime } from "@/lib/format"
 import { cn } from "cn"
 import type { RestoreTarget } from "./restore-dialog"
@@ -358,15 +364,70 @@ export function ReplyComposer({
   focusToken,
   now,
   rows = 6,
+  onSent,
 }: {
   item: ItemDetail
   /** Changes whenever something asks to focus the reply box. */
   focusToken: number
   now: number
   rows?: number
+  /** Called once a reply is queued (e.g. to open the next item). */
+  onSent?: (res: ReplyQueuedResponse) => void
 }) {
   const storageKey = `reply-draft:${item.id}`
   const [text, setText] = useState(() => readDraft(storageKey))
+  const [draftId, setDraftId] = useState<string | null>(null)
+  const qc = useQueryClient()
+  const inFlight = item.replies.find((r) => r.status === "queued" || r.status === "sending")
+  const lastFailed = [...item.replies]
+    .reverse()
+    .find((r) => r.status !== "queued" && r.status !== "sending")
+  const failed = lastFailed?.status === "failed" ? lastFailed : null
+
+  const send = useMutation({
+    mutationFn: () =>
+      api<ReplyQueuedResponse>(`/items/${item.id}/reply`, {
+        method: "POST",
+        body: { text, draftId },
+      }),
+    onSuccess: (res) => {
+      setText("")
+      setDraftId(null)
+      void qc.invalidateQueries({ queryKey: qk.item(item.id) })
+      const undo = async () => {
+        try {
+          const r = await api<{ text: string }>(`/items/${item.id}/replies/${res.replyId}/cancel`, {
+            method: "POST",
+          })
+          // Saved too, in case "after sending" already moved to the next item.
+          writeDraft(storageKey, r.text)
+          setText(r.text)
+          toast.success("Reply cancelled", {
+            description: "It’s back in that item’s reply box.",
+          })
+        } catch (err) {
+          toast.error("Couldn’t undo", {
+            description: err instanceof Error ? err.message : undefined,
+          })
+        }
+        void qc.invalidateQueries({ queryKey: qk.item(item.id) })
+      }
+      if (res.undoSeconds > 0) {
+        toast.success(item.demoAccount ? "Reply queued (demo: not posted)" : "Reply queued", {
+          description: `Sends in ${res.undoSeconds} s.`,
+          duration: res.undoSeconds * 1000,
+          action: { label: "Undo", onClick: () => void undo() },
+        })
+      } else {
+        toast.success(item.demoAccount ? "Reply sent (demo: not posted)" : "Reply sending…")
+      }
+      onSent?.(res)
+    },
+    onError: (err) =>
+      toast.error("Couldn’t send the reply", {
+        description: err instanceof Error ? err.message : undefined,
+      }),
+  })
   const ref = useRef<HTMLTextAreaElement>(null)
   const expired = item.replyWindow?.expired === true
   const app = PLATFORM_APP_NAMES[item.platform]
@@ -396,27 +457,38 @@ export function ReplyComposer({
 
   return (
     <section className="space-y-3" aria-label="Reply">
-      {item.aiDrafts.length > 0 ? (
-        <Section title="AI drafts" icon={<Sparkles className="size-3.5" />}>
-          <div className="space-y-2">
-            {item.aiDrafts.map((d) => (
-              <div key={d.id} className="space-y-2 rounded-lg border p-3 text-sm">
-                <p className="whitespace-pre-wrap">{d.text}</p>
-                <Button size="sm" variant="outline" onClick={() => setText(d.text)}>
-                  Use this draft
-                </Button>
-              </div>
-            ))}
-          </div>
-        </Section>
-      ) : (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Sparkles className="size-3.5" />
-          {item.aiDraftsAllowed
-            ? "AI drafts arrive with Phase 4."
-            : "No AI drafts for this item (rule: notify only)."}
+      <AiDrafts
+        item={item}
+        onUse={(d) => {
+          setText(d.text)
+          setDraftId(d.id)
+        }}
+      />
+
+      {inFlight ? (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+          <Loader2 className="size-3.5 animate-spin" />
+          {inFlight.status === "queued"
+            ? "Your reply is queued and sends shortly."
+            : "Sending your reply…"}
         </p>
-      )}
+      ) : failed ? (
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertTitle>The last reply didn’t send</AlertTitle>
+          <AlertDescription>
+            {failed.error ?? "Unknown error"}
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              onClick={() => setText(failed.text)}
+            >
+              Put it back in the reply box
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {expired ? (
         <Alert variant="destructive">
@@ -451,11 +523,153 @@ export function ReplyComposer({
             {text.trim() ? `Copy & open in ${app}` : `Open in ${app}`}
           </Button>
         ) : null}
-        <Button size="sm" disabled={expired || !item.canReply || text.trim() === ""}>
-          <Send /> Send
+        <Button
+          size="sm"
+          disabled={
+            expired || !item.canReply || text.trim() === "" || Boolean(inFlight) || send.isPending
+          }
+          onClick={() => send.mutate()}
+        >
+          {send.isPending ? <Loader2 className="animate-spin" /> : <Send />} Send
         </Button>
       </div>
       {disabledReason ? <p className="text-xs text-muted-foreground">{disabledReason}</p> : null}
+      {item.platform === "google_business" && item.replies.some((r) => r.status === "sent") ? (
+        <p className="text-xs text-muted-foreground">
+          Google keeps one reply per review: sending again replaces the current one.
+        </p>
+      ) : null}
+      {item.demoAccount ? (
+        <p className="text-xs text-muted-foreground">
+          Demo account: sending runs the real flow, but nothing is posted anywhere.
+        </p>
+      ) : null}
     </section>
+  )
+}
+
+/** How long to show "Drafting…" before assuming the job failed (see Activity → Jobs). */
+const DRAFT_WAIT_MS = 90_000
+
+/**
+ * AI drafts for the composer. Drafts arrive over SSE (items.changed → the item refetches);
+ * while a request is out, the panel shows a placeholder until the draft set changes.
+ */
+function AiDrafts({
+  item,
+  onUse,
+}: {
+  item: ItemDetail
+  onUse: (draft: { id: string; text: string }) => void
+}) {
+  const draftKey = item.aiDrafts.map((d) => d.id).join(",")
+  const [waiting, setWaiting] = useState<{ since: number; key: string } | null>(null)
+  const regenerate = useMutation({
+    mutationFn: () => api(`/items/${item.id}/drafts`, { method: "POST" }),
+    onMutate: () => setWaiting({ since: Date.now(), key: draftKey }),
+    onError: (err) => {
+      setWaiting(null)
+      toast.error("Couldn’t draft replies", {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    },
+  })
+
+  // Pending until the draft set changes (new drafts arrived over SSE) or we give up waiting.
+  const pending = waiting !== null && waiting.key === draftKey
+  useEffect(() => {
+    if (!pending || !waiting) return
+    const t = setTimeout(
+      () => {
+        setWaiting(null)
+        toast.error("Drafting is taking too long", {
+          description: "Check Activity → Jobs for an error, then try again.",
+        })
+      },
+      Math.max(0, waiting.since + DRAFT_WAIT_MS - Date.now()),
+    )
+    return () => clearTimeout(t)
+  }, [pending, waiting])
+
+  if (item.isOwnAccount) return null
+
+  if (!item.ai.available) {
+    return (
+      <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+        <Sparkles className="mt-px size-3.5 shrink-0" />
+        <span>
+          {item.ai.message}{" "}
+          <Suspense fallback={null}>
+            <AiSettingsLink />
+          </Suspense>
+        </span>
+      </p>
+    )
+  }
+
+  const action = (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => regenerate.mutate()}
+      disabled={pending}
+      aria-label={item.aiDrafts.length ? "Regenerate drafts" : "Draft replies with AI"}
+    >
+      {pending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+      {item.aiDrafts.length
+        ? "Regenerate"
+        : item.aiDraftsAllowed
+          ? "Draft replies"
+          : "Draft anyway"}
+    </Button>
+  )
+
+  return (
+    <Section title="AI drafts" icon={<Sparkles className="size-3.5" />}>
+      <div className="space-y-2" aria-busy={pending}>
+        {pending ? (
+          <div className="flex items-center gap-2 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Drafting replies…
+          </div>
+        ) : null}
+        {!pending && item.aiDrafts.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {item.aiDraftsAllowed
+              ? "No drafts yet. They’re written when an item arrives, or ask for them now."
+              : "A filter rule turned off AI drafts for this item."}
+          </p>
+        ) : null}
+        {item.aiDrafts.map((d) => (
+          <div
+            key={d.id}
+            className={cn("space-y-2 rounded-lg border p-3 text-sm", pending && "opacity-50")}
+          >
+            <p className="whitespace-pre-wrap">{d.text}</p>
+            <Button size="sm" variant="outline" onClick={() => onUse(d)}>
+              Use this draft
+            </Button>
+          </div>
+        ))}
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-[11px] text-muted-foreground">
+            {item.aiDrafts[0]
+              ? `Drafted by ${item.aiDrafts[0].model}. Check facts before sending.`
+              : ""}
+          </span>
+          {action}
+        </div>
+      </div>
+    </Section>
+  )
+}
+
+function AiSettingsLink() {
+  const isAdmin = useIsAdmin()
+  if (!isAdmin) return <>Ask an owner or admin to set it up.</>
+  return (
+    <Link href="/settings?tab=ai" className="underline underline-offset-2 hover:text-foreground">
+      Set it up
+    </Link>
   )
 }

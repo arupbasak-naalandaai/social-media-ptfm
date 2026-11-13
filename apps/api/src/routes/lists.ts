@@ -11,7 +11,7 @@ import {
 } from "@inbox/core"
 import { Prisma, type ListEntry, type PrismaClient } from "@inbox/db"
 import { notifyInbox } from "@inbox/pipeline"
-import type { JobSender } from "../lib/jobs"
+import { autoRefilterEnabled, type JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
 import { requireAuth, requireRole } from "../middleware/session"
 import type { AppEnv } from "../types"
@@ -66,7 +66,9 @@ export function listRoutes({ prisma, jobs }: ListRouteDeps) {
       },
     })
     await notifyInbox(prisma, { type: "lists.changed", organizationId })
-    await jobs.enqueueRefilter(organizationId, requestId)
+    if (await autoRefilterEnabled(prisma, organizationId)) {
+      await jobs.enqueueRefilter(organizationId, requestId)
+    }
   }
 
   return new Hono<AppEnv>()

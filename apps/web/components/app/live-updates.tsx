@@ -53,6 +53,20 @@ export function LiveUpdates({ children }: { children: ReactNode }) {
       () => void queryClient.invalidateQueries({ queryKey: qk.lists }),
     )
 
+    source.addEventListener("sync.changed", () => {
+      void queryClient.invalidateQueries({ queryKey: qk.sync })
+      void queryClient.invalidateQueries({ queryKey: qk.connections })
+      void queryClient.invalidateQueries({ queryKey: qk.activity })
+    })
+    source.addEventListener("settings.changed", (e) => {
+      const event = parse(e as MessageEvent<string>)
+      // Our own save already updated the cache to this version: skip the refetch.
+      const cached = queryClient.getQueryData<{ version: number }>(qk.settings)
+      if (event.type === "settings.changed" && cached && cached.version >= event.version) return
+      void queryClient.invalidateQueries({ queryKey: qk.settings })
+      void queryClient.invalidateQueries({ queryKey: qk.activity })
+    })
+
     return () => source.close()
   }, [queryClient])
 

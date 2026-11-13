@@ -39,3 +39,14 @@ async function upsertQueue(boss: PgBoss, name: string, options: QueueOptions): P
     await boss.createQueue(name, options)
   }
 }
+
+/**
+ * Worker options for queues that get many jobs at once (the scheduler leases up to 50 polls per
+ * tick). A NOTIFY wakes each worker for a single fetch and the backstop poll defaults to 30 s,
+ * so without these a backlog drains at about one job per wake.
+ */
+export const BURSTY_QUEUE_WORK = {
+  batchSize: 1,
+  localConcurrency: 4,
+  notifyPollingIntervalSeconds: 2,
+} as const

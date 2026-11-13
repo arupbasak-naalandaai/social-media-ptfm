@@ -241,6 +241,9 @@ export function ItemPage({ itemId }: { itemId: string }) {
                   focusToken={focusToken}
                   now={query.dataUpdatedAt}
                   rows={8}
+                  onSent={(res) => {
+                    if (res.afterSend === "next") moveOn()
+                  }}
                 />
               )}
             </div>

@@ -4,20 +4,20 @@
 
 ## Status
 
-| Phase                           | Status      | Notes                                                                                 |
-| ------------------------------- | ----------- | ------------------------------------------------------------------------------------- |
-| 0. Plan                         | ✅ Done     | Questions answered 2026-11-12 (see PLAN §18)                                          |
-| 1. Foundation                   | 🟡 Built    | 2026-11-12. One acceptance step left: a real Google sign-in (needs your OAuth client) |
-| 2. Filters + Inbox on seed data | ✅ Done     | 2026-11-12. Acceptance verified in the browser and in API integration tests           |
-| 3. Settings + scheduler         | ⏳ Next     |                                                                                       |
-| 4. Google reviews + AI drafts   | ⏳          | Needs GBP API access + a public URL (Phase D)                                         |
-| 5. Meta comments                | ⏳          | Needs Meta App Review + Phase D                                                       |
-| 6. YouTube                      | ⏳          | Polling only: works locally                                                           |
-| 7. Meta DMs                     | ⏳          | Needs Meta App Review (messaging)                                                     |
-| 8. Slack                        | 💤 Deferred | Not in MVP                                                                            |
-| 9. LinkedIn comments            | ⏳          | Needs Community Management API approval + Phase D                                     |
-| 10. Analytics                   | ⏳          |                                                                                       |
-| D. Deploy to Railway            | 💤 Deferred | Run when requested; required before real webhooks                                     |
+| Phase                           | Status      | Notes                                                                                              |
+| ------------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| 0. Plan                         | ✅ Done     | Questions answered 2026-11-12 (see PLAN §18)                                                       |
+| 1. Foundation                   | 🟡 Built    | 2026-11-12. One acceptance step left: a real Google sign-in (needs your OAuth client)              |
+| 2. Filters + Inbox on seed data | ✅ Done     | 2026-11-12. Acceptance verified in the browser and in API integration tests                        |
+| 3. Settings + scheduler         | ✅ Done     | 2026-11-13. Acceptance verified in the browser and in API integration tests                        |
+| 4. Google reviews + AI drafts   | 🟡 Built    | 2026-11-13. Code + tests done. Acceptance needs your GBP API access, OAuth client and a public URL |
+| 5. Meta comments                | ⏳          | Needs Meta App Review + Phase D                                                                    |
+| 6. YouTube                      | ⏳          | Polling only: works locally                                                                        |
+| 7. Meta DMs                     | ⏳          | Needs Meta App Review (messaging)                                                                  |
+| 8. Slack                        | 💤 Deferred | Not in MVP                                                                                         |
+| 9. LinkedIn comments            | ⏳          | Needs Community Management API approval + Phase D                                                  |
+| 10. Analytics                   | ⏳          |                                                                                                    |
+| D. Deploy to Railway            | 💤 Deferred | Run when requested; required before real webhooks                                                  |
 
 ## Phase 1: Foundation (2026-11-12)
 
@@ -140,37 +140,135 @@ Requested after Phase 2: a separate section for people you already interacted wi
 - **Test DB:** apply migrations to `TEST_DATABASE_URL` too (`DATABASE_URL=$TEST_DATABASE_URL pnpm --filter @inbox/db migrate:deploy`).
 - **Not changed:** the existing "≤ 2 words" rule still hides one-word questions such as "When?" on comments. Consider exempting `?` or `isReplyToOurReply`.
 
+## Phase 3: Settings + scheduler (2026-11-13)
+
+**Acceptance:** "Changing an interval changes `nextRunAt` immediately without a redeploy."
+
+| Check                  | Result                                                                                                                                                                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interval → `nextRunAt` | ✅ In headless Chrome: YouTube 10 → 7 min on Settings → Sync moved `nextRunAt` from 19:38:51 to 19:35:51 (last run 19:28:51 + 7 min) in the same save, and the status table showed it live. Also an API integration test                  |
+| Scheduler              | ✅ Live worker against the dev DB: all 7 demo streams polled once and rescheduled on their own intervals; "Run now" in the browser → poll job completed → row updated over SSE. Token check and retention ran once each across 3 restarts |
+| Settings               | ✅ 9 tabs. Min intervals and the YouTube quota block (>90%) are enforced in the UI and the api; a stale version gets 409; secrets are encrypted, shown as last 4 only, and never logged in the audit trail                                |
+| Activity log           | ✅ Audit log (with actors and before/after), Jobs (pg-boss, filter by state/queue), Webhooks (Replay, admins only; bad signatures can't be replayed)                                                                                      |
+| Whole repo             | ✅ lint, typecheck, Prettier, production build, 621 tests (core 563, api 42, pipeline 9, auth 7). No console errors; no horizontal scroll at 390 px                                                                                       |
+
+### What was built
+
+- **`@inbox/core`:** `crypto.ts` (AES-256-GCM, key ids, `ENCRYPTION_KEYS_PREVIOUS` for rotation), a zod schema per Settings tab with secret handling, sync stream definitions and scheduler math (backoff, YouTube quota estimate and Pacific quota day), and the platform API version defaults.
+- **`@inbox/pipeline`:** `ensureSyncStates`, `applySyncSettings` (recompute `nextRunAt` in the save transaction), `claimDueSyncStates` / `claimSyncState` leases, `recordPollResult`, `applyRetention`, `checkTokenExpiry`, `loadSettingsSection` / `loadSettingsSecret`.
+- **API:** `GET /api/settings`, `PUT /api/settings/:section`, `GET /api/sync`, `POST /api/sync/:id/run`, `GET /api/activity/{audit,jobs,webhooks}`, `POST /api/webhooks/:id/replay`. Rule/list changes respect Settings → Filters → "Re-apply rules automatically".
+- **Worker:** scheduler tick, `poll`, `ingest` (webhook replay), `token-refresh`, `maintenance` workers. New `maintenance` queue.
+- **Web:** Settings (9 tabs, `?tab=` in the URL, edits survive switching tabs, sticky save bar, field errors from the server, write-only secret fields, copyable webhook/redirect URLs, live YouTube quota meter, sync status with Run now) and Activity log (3 tabs, expandable rows, load more). SSE `sync.changed` / `settings.changed` refresh both.
+- **Migration** `activity_sync_indexes` (indexes for the Activity log and sync list).
+
+### Decisions and deviations
+
+- **UTC in raw SQL** (see PLAN §12 "As built"): found while running the worker locally; a session time zone of Asia/Kolkata made schedules due 5.5 h early.
+- **Periodic jobs throttled by pg-boss** instead of extra columns: no migration, safe with several worker replicas.
+- **`poll` without pg-boss retries;** failed polls also go to `poll-dlq`, which is harmless but grows until pg-boss's retention clears it.
+- **Slack tab** is visible but labelled "comes later (Phase 8)"; its settings save but do nothing yet.
+- **Audit diffs** are per top-level key, so a Sync change records the whole `streams` object.
+- **Toasts sit over the save bar's Save button** for a few seconds after saving (Sonner, bottom-right). Not changed; only matters for an immediate second save.
+
+### Known notes
+
+- **Local Postgres:** Homebrew upgraded `postgresql@18` to 18.7 while 18.6 was running, which broke `plpgsql` (and pg-boss) until the service was restarted (`brew services restart postgresql@18`). Done on 2026-11-13.
+- **Seeded demo accounts** run on schedule and fetch nothing. Run `pnpm db:seed` (or start the worker: the token check creates missing schedules) to get sync states on an existing dev DB.
+
+## Phase 4: Google reviews + AI drafts (in progress, 2026-11-13)
+
+**Acceptance:** "A real review arrives, gets drafts, and is replied to from the dashboard." **Not run yet.** It needs things only you can set up (see "Needed from you" below). Everything up to Google's servers is built and tested against stubs.
+
+| Check              | Result                                                                                                                                                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI drafts          | ✅ Prompt builder (customer text fenced as untrusted data), structured output, de-duplication, per-platform length limits. Integration-tested with the AI SDK's mock model; no real provider call made yet (no key on this machine) |
+| Replies            | ✅ In headless Chrome on a demo account: Send → "Reply queued" + Undo (5 s) → Undo restores the text; Send again → worker → `sent`, item `Replied`, reply in the thread over SSE                                                    |
+| Double-post safety | ✅ Tests: retries never re-post a sent reply; a non-idempotent send interrupted mid-call fails instead of retrying; Google's PUT is idempotent                                                                                      |
+| Google OAuth       | ✅ Tests (Google stubbed): offline + consent + PKCE, state single-use and bound to the signed-in admin, tokens encrypted per location, sync schedules created, Pub/Sub notifications set per account                                |
+| Google sync/tokens | ✅ Tests: newest-first paging to the cursor, first-sync backfill, token refresh before expiry, `invalid_grant` → "Reconnect", zero-quota 429 explained                                                                              |
+| Pub/Sub push       | ✅ Tests with a locally signed RS256 JWT: valid → stored + ingest queued; wrong audience/sender/unverified email/no token → 401 and stored as bad signature; redelivery de-duplicated                                               |
+| Connections page   | ✅ Connect (needs the OAuth client in Settings), include toggle, Test, Reconnect, Disconnect; OAuth results as toasts. Checked at 1400 px and 390 px, no console errors                                                             |
+| Whole repo         | ✅ lint, typecheck, Prettier, production build, 661 tests (core 578, api 52, pipeline 24, auth 7)                                                                                                                                   |
+
+### What was built
+
+- **AI drafts:**
+  - `@inbox/core` `ai/drafts.ts`: prompt, output schema, `cleanDrafts`, `replyLengthError` (Google counts **bytes**).
+  - `@inbox/pipeline` `ai.ts`: provider factory (Claude/ChatGPT/Gemini via AI SDK 7), `draftRepliesForItem`, availability check, key test.
+  - Worker `ai-draft` job; drafts on arrival (after a sync) or on open, per Settings.
+  - API: `POST /api/items/:id/drafts` (Regenerate; overrides a rule's "no drafts" for that item), `POST /api/settings/ai/test`, `ItemDetail.ai`.
+  - Web: drafts panel (Use / Regenerate / why not), and "Test connection" on Settings → AI replies.
+- **Replies:**
+  - `@inbox/pipeline` `replies.ts`: validation (reply window, length, one in flight, own/filtered items), signature, undo, and the send state machine.
+  - Worker `send-reply` job with a sender registry. Demo accounts "send" without posting.
+  - API: `POST /api/items/:id/reply`, `POST /api/items/:id/replies/:replyId/cancel`.
+  - Web: Send, Undo toast, "after sending" (next/stay), in-flight and failed states.
+- **Google Business Profile:**
+  - `@inbox/core` `adapters/google`: zod wire schemas, `normalizeGbpReview` (keeps the original text of Google-translated reviews), defensive Pub/Sub parsing, fixture.
+  - `@inbox/pipeline` `google.ts`: OAuth + PKCE, token storage/refresh, accounts/locations/reviews/reply/notifications calls, `fetchNewGbpReviews`.
+  - Worker: `gbp_reviews` poll adapter, Google reply sender, Pub/Sub handler (a push triggers an immediate reconcile of that location).
+  - API: `GET /api/oauth/google/{start,callback}`, `GET/PATCH /api/connections`, `POST /api/connections/:id/{test,disconnect}`, `POST /webhooks/google`.
+  - Settings → Connections: new **Pub/Sub topic** field.
+- **Dependencies** (exact pins, newest patch at least 2 weeks old): `ai` 7.0.157, `@ai-sdk/anthropic` 4.0.92, `@ai-sdk/openai` 4.0.105, `@ai-sdk/google` 4.0.108, `jose` 6.2.14.
+
+### Decisions and deviations
+
+- **OAuth redirect URI is on the web domain:** `WEB_URL/api/oauth/google/callback`, proxied to the api, instead of the api's public domain. The session cookie comes along, so the callback is bound to the admin who started it. State and the PKCE verifier are kept server-side (encrypted, single use, 10 min). Settings shows this URI to paste into the Google OAuth client.
+- **Tokens per location:** each location row stores the (same) Google tokens, encrypted with AAD `orgId|platform_account|google_business:<locationId>:<access|refresh>`. Disconnecting one location doesn't revoke the Google grant, because the other locations share it.
+- **Pub/Sub is a hint:** the payload format isn't documented, so a push only triggers an immediate reconcile poll for that location. The poll is the single source of review data.
+- **Reconcile cursor** = the newest `updateTime` seen. A first backfill with over 1,000 reviews skips the older ones (logged).
+- **Permanent AI errors** (bad key/model, 4xx) complete the job with the error in its output instead of burning retries.
+- **Demo accounts can "send"** (nothing is posted), so the reply flow can be tried locally. The composer says so.
+- **Draft schema is loose** (up to 10 strings); trimming to the requested count and platform length happens after, so one extra draft doesn't fail the call.
+
+### Needed from you (to run the acceptance)
+
+1. **GBP API access:** the profile must be verified and active for 60+ days and have a website. Submit Google's access form with the GCP project number. Quota is 0 until approved.
+2. **A GCP OAuth client** (Web application) with redirect URI `<WEB_URL>/api/oauth/google/callback`. Enable the Business Profile APIs (Account Management, Business Information, My Business Notifications, plus v4 reviews). **Publish the OAuth app**: in "Testing", Google refresh tokens expire after 7 days.
+3. **Pub/Sub** (optional; without it, reviews arrive on the 30-min reconcile): a topic with `mybusiness-api-pubsub@system.gserviceaccount.com` as Publisher, and a push subscription to `<API_PUBLIC_URL>/webhooks/google` with OIDC auth (a service account; put its email in Settings). This needs a **public HTTPS URL**, i.e. Phase D.
+4. **An AI key** (Claude, ChatGPT or Gemini) and a model ID in Settings → AI replies, then "Test connection".
+
+### Known notes
+
+- The browser checks sent replies on two seeded demo reviews in the dev DB (nothing was posted anywhere). `pnpm db:seed --reset` restores the demo data.
+- **Not built yet:** marking an item handled when its owner reply was posted in Google directly (the reply is kept in `raw.reviewReply`), and deleting a reply.
+
 ## Open questions
 
-- None blocking Phase 3.
+- Phase 4 acceptance is blocked on the items under "Needed from you" above (GBP API access, OAuth client, AI key; a public URL for real-time push).
 - Not answered yet, and not blocking: which platforms and how many pages/locations/channels exist, and whether a Meta app, GCP project, or LinkedIn app already exists. Needed before Phase 4.
 
 ## Decisions log
 
-| Date       | Decision                                                                                                                                          |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-11-12 | Prisma pinned to 7.10.1 (8.x is RC and outside better-auth's peer range)                                                                          |
-| 2026-11-12 | TypeScript pinned to 6.0.3 (typescript-eslint does not support 7.x yet)                                                                           |
-| 2026-11-12 | TanStack Table v9 (matches the current shadcn data-table guide)                                                                                   |
-| 2026-11-12 | Live fan-out via Postgres LISTEN/NOTIFY: no Redis                                                                                                 |
-| 2026-11-12 | Blocklist/Allowlist/keyword lists stored in one `ListEntry` table                                                                                 |
-| 2026-11-12 | Platform connections use custom one-click OAuth flows, not better-auth `linkSocial` (org-owned, derived Page tokens, IG Unified Login)            |
-| 2026-11-12 | Sign-in: better-auth Google One Tap plugin + "Continue with Google" fallback                                                                      |
-| 2026-11-12 | AI providers: Claude, ChatGPT, Gemini via Vercel AI SDK (`@ai-sdk/anthropic`/`openai`/`google`)                                                   |
-| 2026-11-12 | Slack deferred (Phase 8); Railway deploy deferred (Phase D); no custom domain yet                                                                 |
-| 2026-11-12 | MVP is one org + one user; organization plugin and roles kept for later expansion                                                                 |
-| 2026-11-12 | `dashboard/` (bun scaffold) replaced by `apps/web` on pnpm                                                                                        |
-| 2026-11-12 | ESLint 9.39 (not 10) until eslint-config-next's plugins support 10                                                                                |
-| 2026-11-12 | shadcn `base-nova` style (Base UI primitives), the CLI default                                                                                    |
-| 2026-11-12 | Owners always pass the sign-in check; first-owner bootstrap serialized with a Postgres advisory lock; optional `BOOTSTRAP_OWNER_EMAILS`           |
-| 2026-11-12 | Web reads the session via `'use cache: private'` `getCurrentMe()` → api `/api/me`; `proxy.ts` is an optimistic cookie check only                  |
-| 2026-11-12 | `DEV_AUTH_BYPASS` local preview mode (virtual user, no DB writes, refused in production/Railway), requested to check the UI without login         |
-| 2026-11-12 | `resolved` status (done without reply); `filtered` (rule) vs `archived` (person)                                                                  |
-| 2026-11-12 | First sign-in claims an ownerless (seeded) org as owner                                                                                           |
-| 2026-11-12 | Re-filter touches only `new`/`filtered` items without `manualOverride`; stored items are never deleted by a later drop rule                       |
-| 2026-11-12 | `@inbox/pipeline` package for DB-aware pipeline code shared by api, worker and seed                                                               |
-| 2026-11-12 | React Query for client data; SSE invalidates query prefixes                                                                                       |
-| 2026-11-13 | Follow-ups: threads we replied to/resolved get their own tab; later items in them skip the Open tab (`Item.threadKey`, `isFollowUp`)              |
-| 2026-11-13 | Opening an item goes to a full page (`/items/[id]`); the side sheet is a quick preview without a composer                                         |
-| 2026-11-13 | "Open in <app>" links built per platform (`itemLink`), adapter permalinks preferred; "Copy & open" for replying in the native app                 |
-| 2026-11-13 | Low-value filter: `isLowValue` field + editable Low-value phrases list + `archive_low_value` default rule; "Hide similar" learns phrases (admins) |
+| Date       | Decision                                                                                                                                                  |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-12 | Prisma pinned to 7.10.1 (8.x is RC and outside better-auth's peer range)                                                                                  |
+| 2026-11-12 | TypeScript pinned to 6.0.3 (typescript-eslint does not support 7.x yet)                                                                                   |
+| 2026-11-12 | TanStack Table v9 (matches the current shadcn data-table guide)                                                                                           |
+| 2026-11-12 | Live fan-out via Postgres LISTEN/NOTIFY: no Redis                                                                                                         |
+| 2026-11-12 | Blocklist/Allowlist/keyword lists stored in one `ListEntry` table                                                                                         |
+| 2026-11-12 | Platform connections use custom one-click OAuth flows, not better-auth `linkSocial` (org-owned, derived Page tokens, IG Unified Login)                    |
+| 2026-11-12 | Sign-in: better-auth Google One Tap plugin + "Continue with Google" fallback                                                                              |
+| 2026-11-12 | AI providers: Claude, ChatGPT, Gemini via Vercel AI SDK (`@ai-sdk/anthropic`/`openai`/`google`)                                                           |
+| 2026-11-12 | Slack deferred (Phase 8); Railway deploy deferred (Phase D); no custom domain yet                                                                         |
+| 2026-11-12 | MVP is one org + one user; organization plugin and roles kept for later expansion                                                                         |
+| 2026-11-12 | `dashboard/` (bun scaffold) replaced by `apps/web` on pnpm                                                                                                |
+| 2026-11-12 | ESLint 9.39 (not 10) until eslint-config-next's plugins support 10                                                                                        |
+| 2026-11-12 | shadcn `base-nova` style (Base UI primitives), the CLI default                                                                                            |
+| 2026-11-12 | Owners always pass the sign-in check; first-owner bootstrap serialized with a Postgres advisory lock; optional `BOOTSTRAP_OWNER_EMAILS`                   |
+| 2026-11-12 | Web reads the session via `'use cache: private'` `getCurrentMe()` → api `/api/me`; `proxy.ts` is an optimistic cookie check only                          |
+| 2026-11-12 | `DEV_AUTH_BYPASS` local preview mode (virtual user, no DB writes, refused in production/Railway), requested to check the UI without login                 |
+| 2026-11-12 | `resolved` status (done without reply); `filtered` (rule) vs `archived` (person)                                                                          |
+| 2026-11-12 | First sign-in claims an ownerless (seeded) org as owner                                                                                                   |
+| 2026-11-12 | Re-filter touches only `new`/`filtered` items without `manualOverride`; stored items are never deleted by a later drop rule                               |
+| 2026-11-12 | `@inbox/pipeline` package for DB-aware pipeline code shared by api, worker and seed                                                                       |
+| 2026-11-12 | React Query for client data; SSE invalidates query prefixes                                                                                               |
+| 2026-11-13 | Follow-ups: threads we replied to/resolved get their own tab; later items in them skip the Open tab (`Item.threadKey`, `isFollowUp`)                      |
+| 2026-11-13 | Opening an item goes to a full page (`/items/[id]`); the side sheet is a quick preview without a composer                                                 |
+| 2026-11-13 | "Open in <app>" links built per platform (`itemLink`), adapter permalinks preferred; "Copy & open" for replying in the native app                         |
+| 2026-11-13 | Low-value filter: `isLowValue` field + editable Low-value phrases list + `archive_low_value` default rule; "Hide similar" learns phrases (admins)         |
+| 2026-11-13 | Scheduler compares times in UTC in raw SQL; per-org periodic jobs throttled with pg-boss `singletonSeconds`; `poll` retried by the scheduler, not pg-boss |
+| 2026-11-13 | Settings secrets stored inside the section JSON as `{enc,last4}`; write-only in the UI; version compare-and-swap on save                                  |
+| 2026-11-13 | Google OAuth redirect URI on the web domain (`/api/oauth/google/callback`), state + PKCE stored server-side; tokens stored per location row               |
+| 2026-11-13 | AI SDK 7 + providers and `jose` pinned exactly to patches ≥ 2 weeks old                                                                                   |
+| 2026-11-13 | Pub/Sub pushes only trigger a reconcile poll (payload undocumented); demo accounts can "send" replies (nothing posted)                                    |

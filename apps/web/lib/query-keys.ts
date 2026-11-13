@@ -6,4 +6,9 @@ export const qk = {
   item: (id: string) => ["items", "detail", id] as const,
   filters: ["filters"] as const,
   lists: ["lists"] as const,
+  settings: ["settings"] as const,
+  sync: ["sync"] as const,
+  connections: ["connections"] as const,
+  activity: ["activity"] as const,
+  activityTab: (tab: string, params: Record<string, unknown>) => ["activity", tab, params] as const,
 }

@@ -11,6 +11,7 @@ import {
   itemLink,
   itemListQuerySchema,
   learnLowValuePhrase,
+  replyRequestSchema,
   restoreItemSchema,
   type FollowUpListResponse,
   type FollowUpThread,
@@ -18,13 +19,24 @@ import {
   type InboxView,
   type ItemCounts,
   type ItemDetail,
+  type ReplyQueuedResponse,
   type ItemListResponse,
   type ItemStatus,
   type ItemSummary,
   type ThreadEntry,
 } from "@inbox/core"
 import { Prisma, type PrismaClient } from "@inbox/db"
-import { markLaterItemsAsFollowUps, notifyInbox } from "@inbox/pipeline"
+import {
+  aiAvailability,
+  canSendFrom,
+  isDemoAccount,
+  cancelReply,
+  queueReply,
+  ReplyRejected,
+  loadSettingsSection,
+  markLaterItemsAsFollowUps,
+  notifyInbox,
+} from "@inbox/pipeline"
 import type { JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
 import { requireAuth, requireRole } from "../middleware/session"
@@ -315,7 +327,13 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
             matchedRuleIds: true,
             dryRunRuleIds: true,
             platformAccount: {
-              select: { displayName: true, externalId: true, accessTokenEnc: true },
+              select: {
+                displayName: true,
+                externalId: true,
+                accessTokenEnc: true,
+                meta: true,
+                status: true,
+              },
             },
             conversation: { select: { customerLastMessageAt: true } },
             aiDrafts: {
@@ -390,6 +408,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           ])
           .sort((a, b) => a.at.localeCompare(b.at))
 
+        const aiBlocked = await aiAvailability(prisma, org.id)
         const windowHours = row.type === "dm" ? DM_REPLY_WINDOW_HOURS[row.platform] : undefined
         const last = row.conversation?.customerLastMessageAt ?? null
         const expiresAt =
@@ -439,9 +458,120 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
             : null,
           aiDrafts: aiDrafts.map((d) => ({ ...d, createdAt: d.createdAt.toISOString() })),
           replies: replies.map((r) => ({ ...r, sentAt: r.sentAt?.toISOString() ?? null })),
-          canReply: Boolean(platformAccount.accessTokenEnc),
+          canReply: canSendFrom(platformAccount),
+          demoAccount: isDemoAccount(platformAccount),
+          ai: { available: aiBlocked === null, message: aiBlocked?.message ?? null },
+        }
+
+        // Settings → AI replies → "When someone opens the item": draft now (deduplicated).
+        if (
+          aiBlocked === null &&
+          aiDrafts.length === 0 &&
+          aiDraftsAllowed &&
+          !isOwnAccount &&
+          (row.status === "new" || row.status === "pending") &&
+          (await loadSettingsSection(prisma, org.id, "ai")).generateOn === "open"
+        ) {
+          await jobs.enqueueAiDraft({
+            organizationId: org.id,
+            itemId: row.id,
+            requestId: c.get("requestId"),
+          })
         }
         return c.json(detail)
+      })
+
+      // Queue a reply; it posts after Settings → Replies → undo window unless cancelled.
+      .post(
+        "/:id/reply",
+        validate("param", idParam),
+        validate("json", replyRequestSchema),
+        async (c) => {
+          const org = c.get("org")!
+          const { id } = c.req.valid("param")
+          const body = c.req.valid("json")
+          let queued
+          try {
+            queued = await queueReply(prisma, {
+              organizationId: org.id,
+              itemId: id,
+              userId: c.get("user")!.id,
+              text: body.text,
+              draftId: body.draftId,
+            })
+          } catch (err) {
+            if (err instanceof ReplyRejected) {
+              throw new HTTPException(err.status, { message: err.message })
+            }
+            throw err
+          }
+          await jobs.enqueueSendReply(
+            { organizationId: org.id, replyId: queued.reply.id, requestId: c.get("requestId") },
+            queued.undoSeconds,
+          )
+          await notifyInbox(prisma, {
+            type: "items.changed",
+            organizationId: org.id,
+            itemIds: [id],
+            reason: "reply_queued",
+          })
+          const body202: ReplyQueuedResponse = {
+            replyId: queued.reply.id,
+            text: queued.reply.text,
+            undoSeconds: queued.undoSeconds,
+            sendsAt: new Date(Date.now() + queued.undoSeconds * 1000).toISOString(),
+            afterSend: queued.afterSend,
+          }
+          return c.json(body202, 202)
+        },
+      )
+
+      // Undo within the window. 409 once it has started sending.
+      .post(
+        "/:id/replies/:replyId/cancel",
+        validate("param", z.object({ id: z.string().min(1), replyId: z.string().min(1) })),
+        async (c) => {
+          const org = c.get("org")!
+          const { id, replyId } = c.req.valid("param")
+          const text = await cancelReply(prisma, org.id, replyId)
+          if (text === null) {
+            throw new HTTPException(409, { message: "Too late: the reply is already sending" })
+          }
+          await notifyInbox(prisma, {
+            type: "items.changed",
+            organizationId: org.id,
+            itemIds: [id],
+            reason: "reply_cancelled",
+          })
+          return c.json({ cancelled: true, text })
+        },
+      )
+
+      // Draft (again) with AI. Replaces drafts nobody picked; 409 when AI isn't set up.
+      .post("/:id/drafts", validate("param", idParam), async (c) => {
+        const org = c.get("org")!
+        const { id } = c.req.valid("param")
+        const item = await prisma.item.findFirst({
+          where: { id, organizationId: org.id },
+          select: { id: true, aiDraftsAllowed: true, isOwnAccount: true },
+        })
+        if (!item) throw new HTTPException(404, { message: "Item not found" })
+        if (item.isOwnAccount) {
+          throw new HTTPException(409, { message: "This is our own message: nothing to reply to" })
+        }
+        const blocked = await aiAvailability(prisma, org.id)
+        if (blocked) throw new HTTPException(409, { message: blocked.message })
+        if (!item.aiDraftsAllowed) {
+          // An explicit click overrides a rule's "no AI drafts" for this item.
+          await prisma.item.update({ where: { id }, data: { aiDraftsAllowed: true } })
+        }
+        await jobs.enqueueAiDraft({
+          organizationId: org.id,
+          itemId: id,
+          force: true,
+          requestId: c.get("requestId"),
+        })
+        return c.json({ queued: true }, 202)
       })
 
       .post("/:id/resolve", validate("param", idParam), async (c) => {

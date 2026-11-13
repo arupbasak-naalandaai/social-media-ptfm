@@ -1,8 +1,8 @@
 import type { Metadata } from "next"
-import { PlaceholderPage } from "@/components/app/placeholder-page"
+import { ConnectionsPage } from "@/components/connections/connections-page"
 
 export const metadata: Metadata = { title: "Connections" }
 
 export default function Page() {
-  return <PlaceholderPage href="/connections" />
+  return <ConnectionsPage />
 }

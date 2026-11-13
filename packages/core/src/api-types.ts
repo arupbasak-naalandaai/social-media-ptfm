@@ -21,6 +21,8 @@ import {
   type Priority,
 } from "./filters/types"
 import type { ItemLink } from "./links"
+import type { SecretKey, SecretStatus, SettingsSection, SettingsValues } from "./settings/sections"
+import type { AccountKind, SyncMode, SyncStreamKey } from "./settings/sync"
 
 /**
  * Statuses each inbox view shows by default. The inbox view also leaves out follow-ups
@@ -168,6 +170,10 @@ export interface ItemDetail extends ItemSummary {
   }[]
   /** Whether replying can work yet (an account with tokens is connected). */
   canReply: boolean
+  /** Seeded demo account: replies go through the whole flow but nothing is posted. */
+  demoAccount: boolean
+  /** AI drafting for this workspace: ready, or why not (shown instead of drafts). */
+  ai: { available: boolean; message: string | null }
 }
 
 export interface ThreadEntry {
@@ -310,3 +316,190 @@ export type InboxStreamEvent =
   | { type: "items.refiltered"; changed: number; examined: number }
   | { type: "rules.changed" }
   | { type: "lists.changed" }
+  | { type: "sync.changed"; syncStateIds: string[] }
+  | { type: "settings.changed"; section: SettingsSection; version: number }
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+export interface SettingsSectionDto<S extends SettingsSection> {
+  values: SettingsValues[S]
+  secrets: Record<SecretKey<S>, SecretStatus>
+}
+
+export interface SettingsResponse {
+  /** Optimistic concurrency: send it back with every PUT. */
+  version: number
+  updatedAt: string | null
+  sections: { [S in SettingsSection]: SettingsSectionDto<S> }
+  /** Read-only facts for the Connections and Sync tabs. */
+  meta: {
+    apiPublicUrl: string
+    webUrl: string
+    webhookUrls: { meta: string; google: string; linkedin: string; slack: string }
+    oauthRedirectUrls: {
+      google: string
+      meta: string
+      linkedin: string
+    }
+    /** Included YouTube channels (for the quota meter). */
+    youtubeChannels: number
+  }
+}
+
+export interface SettingsUpdateResponse<S extends SettingsSection = SettingsSection> {
+  version: number
+  updatedAt: string
+  section: SettingsSectionDto<S>
+  /** Sync tab: how many schedules were recalculated by this save. */
+  rescheduled?: number
+}
+
+// ─── Sync ─────────────────────────────────────────────────────────────────────
+
+export interface SyncStateDto {
+  id: string
+  stream: SyncStreamKey
+  account: {
+    id: string
+    displayName: string
+    platform: Platform
+    kind: AccountKind
+    status: "connected" | "expiring" | "error" | "disconnected"
+    included: boolean
+    /** Seeded demo account: syncs run but fetch nothing. */
+    demo: boolean
+  }
+  mode: SyncMode
+  intervalSeconds: number
+  lastRunAt: string | null
+  nextRunAt: string
+  lastSuccessAt: string | null
+  consecutiveFailures: number
+  lastError: string | null
+  quotaUsedToday: number
+  /** A poll job holds the lease right now. */
+  running: boolean
+  /** The scheduler will pick it up (not paused, not webhook-only, account usable). */
+  scheduled: boolean
+}
+
+export interface SyncListResponse {
+  paused: boolean
+  states: SyncStateDto[]
+  youtube: { dailyQuota: number; estimatedDailyUnits: number; usedToday: number }
+}
+
+// ─── Activity ─────────────────────────────────────────────────────────────────
+
+export interface AuditEntryDto {
+  id: string
+  action: string
+  entity: string
+  entityId: string | null
+  actor: { id: string; name: string | null; email: string | null } | null
+  before: unknown
+  after: unknown
+  createdAt: string
+}
+
+export const JOB_STATES = [
+  "created",
+  "retry",
+  "active",
+  "completed",
+  "cancelled",
+  "failed",
+] as const
+export type JobState = (typeof JOB_STATES)[number]
+
+export interface JobDto {
+  id: string
+  queue: string
+  state: JobState
+  /** Job payload without server-internal ids. */
+  data: Record<string, unknown>
+  /** Error message (failed jobs) or the handler's result. */
+  output: unknown
+  retryCount: number
+  retryLimit: number
+  createdOn: string
+  startedOn: string | null
+  completedOn: string | null
+}
+
+export interface WebhookEventDto {
+  id: string
+  source: string
+  dedupeKey: string | null
+  signatureValid: boolean
+  receivedAt: string
+  processedAt: string | null
+  error: string | null
+  attempts: number
+  payload: unknown
+}
+
+export interface Paged<T> {
+  entries: T[]
+  nextCursor: string | null
+}
+
+export const activityQuerySchema = z.object({
+  cursor: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+})
+
+export const jobsQuerySchema = activityQuerySchema.extend({
+  state: z.enum(JOB_STATES).optional(),
+  queue: z.string().trim().max(40).optional(),
+})
+
+export const auditQuerySchema = activityQuerySchema.extend({
+  entity: z.string().trim().max(40).optional(),
+})
+
+// ─── Replies ──────────────────────────────────────────────────────────────────
+
+export const replyRequestSchema = z.object({
+  text: z.string().trim().min(1, "Write a reply first").max(20_000),
+  draftId: z.string().min(1).nullish(),
+})
+export type ReplyRequest = z.infer<typeof replyRequestSchema>
+
+export interface ReplyQueuedResponse {
+  replyId: string
+  /** Final text, signature included. */
+  text: string
+  undoSeconds: number
+  sendsAt: string
+  afterSend: "next" | "stay"
+}
+
+// ─── Connections ──────────────────────────────────────────────────────────────
+
+export interface ConnectionDto {
+  id: string
+  platform: Platform
+  kind: AccountKind
+  displayName: string
+  /** e.g. the Google account a location belongs to. */
+  parentName: string | null
+  status: "connected" | "expiring" | "error" | "disconnected"
+  included: boolean
+  lastError: string | null
+  lastErrorAt: string | null
+  tokenExpiresAt: string | null
+  /** Seeded demo account: no real connection. */
+  demo: boolean
+  /** "Open in …" link for the account, when known. */
+  url: string | null
+  createdAt: string
+}
+
+export interface ConnectionsResponse {
+  accounts: ConnectionDto[]
+  /** Whether each platform's app credentials are set in Settings → Connections. */
+  configured: { google: boolean; meta: boolean; linkedin: boolean }
+}
+
+export const connectionPatchSchema = z.object({ included: z.boolean() })

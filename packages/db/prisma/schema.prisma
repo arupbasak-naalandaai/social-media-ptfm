@@ -180,6 +180,7 @@ model SyncState {
 
   @@unique([platformAccountId, stream])
   @@index([nextRunAt])
+  @@index([organizationId])
   @@map("sync_state")
 }
 
@@ -200,6 +201,7 @@ model WebhookEvent {
 
   @@unique([source, dedupeKey])
   @@index([receivedAt])
+  @@index([organizationId, receivedAt(sort: Desc)])
   @@map("webhook_event")
 }
 

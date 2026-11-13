@@ -1,6 +1,6 @@
 # Unified Social Inbox: Plan
 
-> Status: **Phase 2 done; inbox workflow changes (§19) in** · Last updated: 2026-11-13
+> Status: **Phase 3 done; Phase 4 built, acceptance pending (needs GBP access)** · Last updated: 2026-11-13
 > Source of truth for decisions. Progress is tracked in [`PROGRESS.md`](./PROGRESS.md).
 
 ## 1. Goal
@@ -450,18 +450,38 @@ Researched 2026-11-12 from official docs. **[verify]** marks items we could not 
 
 ### Google Business Profile (Phase 4)
 
-- **Reviews** stay on v4:
-  - List: `GET mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews`, or `locations:batchGetReviews`.
-  - Reply: `PUT .../reviews/{r}/reply` with body `{comment}`.
-  - `get` omits `reviewReplyState`, so use list or batch.
-- **Notifications.**
-  - Set them with `PATCH mybusinessnotifications.googleapis.com/v1/accounts/{a}/notificationSetting?updateMask=pubsubTopic,notificationTypes`, using types `NEW_REVIEW` and `UPDATED_REVIEW`.
+_Re-verified 2026-11-13 against developers.google.com/my-business, docs.cloud.google.com/pubsub and developers.google.com/identity._
+
+- **Reviews** stay on v4 (`https://mybusiness.googleapis.com/v4`):
+  - List: `GET accounts/{a}/locations/{l}/reviews`. `pageSize` is at most 50. `orderBy` is `updateTime desc` (the default), `rating` or `rating desc`. Ascending updateTime isn't supported, so reconcile pages newest-first until it reaches the cursor.
+  - Batch: `POST accounts/{a}/locations:batchGetReviews` (under the **account**). Body: `{locationNames ≤ 50, pageSize, pageToken, orderBy}`.
+  - Reply: `PUT .../reviews/{r}/reply` with body `{comment}`. A second PUT edits the reply. It works on verified locations only. **The limit is 4096 bytes of UTF-8** (`replyLengthError`).
+  - Delete reply: `DELETE .../reviews/{r}/reply`.
+  - `get` omits `reviewReplyState` and `policyViolation`, so use list or batch.
+- **Review shape:**
+  - Fields: `{name, reviewId, reviewer{displayName, profilePhotoUrl, isAnonymous}, starRating ONE…FIVE, comment?, createTime, updateTime, reviewReply?{comment, updateTime, reviewReplyState PENDING|REJECTED|APPROVED, policyViolation}, reviewMediaItems?, reviewReplyUrl?}`.
+  - `comment` is absent on rating-only reviews.
+  - Google-translated comments may contain `(Translated by Google) … (Original) …` in either order. This isn't documented, so parse it defensively.
+- **Accounts and locations:**
+  - Accounts: `GET mybusinessaccountmanagement.googleapis.com/v1/accounts` (`pageSize` ≤ 20).
+  - Locations: `GET mybusinessbusinessinformation.googleapis.com/v1/accounts/{a}/locations?readMask=name,title,storeCode,metadata` (`pageSize` ≤ 100).
+  - A location is named `locations/{l}`. The v4 path is `accounts/{a}/locations/{l}`.
+  - `metadata.mapsUri`, `newReviewUri` and `placeId` give links.
+- **Notifications:**
+  - Set them with `PATCH mybusinessnotifications.googleapis.com/v1/accounts/{a}/notificationSetting?updateMask=pubsubTopic,notificationTypes` and body `{name, pubsubTopic, notificationTypes:["NEW_REVIEW","UPDATED_REVIEW"]}`. The reference and the guide disagree on the update mask **[verify on first real call]**.
   - Grant `pubsub.topics.publish` on the topic to `mybusiness-api-pubsub@system.gserviceaccount.com`.
-  - Q&A types are deprecated because the Q&A API was discontinued on 2025-11-03.
-- **Pub/Sub push auth.**
-  - The push subscription has a service account. Each push carries `Authorization: Bearer <Google-signed OIDC JWT>`.
-  - We verify signature (Google JWKS), `iss`, `aud` (we set an explicit audience = `API_PUBLIC_URL/webhooks/google`), `email` (the expected SA), `email_verified`, and `exp`.
-- **Access.** The GBP API needs an access request: the profile must be verified and active for 60+ days, and you provide the GCP project number. Quota is **0 QPM until approved**, then 300 QPM. Scope is `business.manage`.
+  - There is one setting per account. An empty `notificationTypes` turns it off.
+- **Pub/Sub push:**
+  - Body: `{message:{data(base64), attributes, messageId, publishTime}, subscription}`. Any 2xx (or 102) acks; anything else is redelivered.
+  - The decoded GBP payload is **not documented**: accept `review|reviewName|review_name`, `location|locationName|location_name` and `type|notificationType`, and treat them only as a hint to refetch.
+  - Auth: `Authorization: Bearer <RS256 OIDC JWT>`. Verify it with the JWKS at `https://www.googleapis.com/oauth2/v3/certs`. Check `iss` ∈ {`https://accounts.google.com`, `accounts.google.com`}, `aud` (we set it explicitly; it defaults to the push URL), `email` = the configured push service account, `email_verified` and `exp`.
+- **OAuth (web-server flow):**
+  - Authorize at `accounts.google.com/o/oauth2/v2/auth` with `access_type=offline`, `prompt=consent` (or no refresh token comes back on re-consent), `include_granted_scopes`, `state` and PKCE S256. Exchange and refresh at `oauth2.googleapis.com/token`. Revoke at `oauth2.googleapis.com/revoke`.
+  - Read `expires_in` from every response, and check the granted `scope` (users can grant only some scopes).
+  - `invalid_grant` means re-consent is needed, so mark the account `error`.
+  - **An External app in "Testing" status gets refresh tokens that expire after 7 days.** Publish the OAuth app for production use.
+- **Access and quota:** scope `https://www.googleapis.com/auth/business.manage`. The access form needs a profile that has been verified and active for 60+ days, plus a website. Quota is 0 QPM until approved, then 300 QPM per API (429 `RESOURCE_EXHAUSTED` when over). No version header is needed.
+- **Policy:** replies must not be automated without the owner's express consent. Dashboard replies are user-initiated, and auto-reply rules stay behind Settings → Replies.
 
 ### YouTube Data API v3 (Phase 6)
 
@@ -516,21 +536,31 @@ Researched 2026-11-12 from official docs. **[verify]** marks items we could not 
 - **Settings changes** recompute `nextRunAt` in the same transaction, so a new interval applies from the next tick without a redeploy.
 - **Backoff:** `min(interval × 2^failures, 6 h)`. After 3 consecutive failures, `PlatformAccount.status = error` with `lastError` shown in the UI.
 - **YouTube quota:** the estimate is `(86400 / interval) × channels × (commentThreads.list cost × expected pages)` against the daily quota. The UI shows the meter and blocks saves that exceed 90%. Real usage is counted in `SyncState.quotaUsedToday`.
-- **pg-boss queues:** `ingest`, `filter`, `ai-draft`, `notify-slack`, `send-reply`, `poll`, `token-refresh`. Each has retries with exponential backoff and a dead-letter queue. `filter` re-runs rules on stored items after a rule change ("apply to existing items" button).
+- **pg-boss queues:** `ingest`, `filter`, `ai-draft`, `notify-slack`, `send-reply`, `poll`, `token-refresh`, `maintenance` (added in Phase 3: data retention). Each has retries with exponential backoff and a dead-letter queue. `filter` re-runs rules on stored items after a rule change ("apply to existing items" button).
+
+### As built (Phase 3)
+
+- **Scheduler** (`apps/worker/src/scheduler.ts`, every 30 s, overlapping ticks skipped): leases due rows with the SQL above (`packages/pipeline/src/sync.ts`) and sends one `poll` per row (`singletonKey = syncStateId`). The poll job records the result (`recordPollResult`: lease cleared, backoff, quota day, account `error` after 3 failures and back to `connected` on success). `poll` has **no pg-boss retries**: the scheduler's backoff is the retry.
+- **Times in raw SQL are compared in UTC** (`now() AT TIME ZONE 'UTC'`). Prisma stores `DateTime` as `timestamp` without a zone, so a plain `now()` in a non-UTC session made rows due hours early. Covered by a regression test.
+- **Per-org periodic jobs** (`token-refresh` every `tokenRefreshHours`, `maintenance` daily) are sent on every tick and throttled by pg-boss (`singletonKey = orgId` + `singletonSeconds`), so replicas and restarts create at most one per window. `token-refresh` also creates missing SyncState rows; it marks tokens expiring within Settings → Notifications' warning window as `expiring`, and expired ones as `error`. Platform-specific token renewal arrives with each platform.
+- **Poll adapters / webhook handlers** are registries in the worker (`sync/adapters.ts`, `jobs/ingest.ts`). Phase 3 ships only the demo adapter (seeded accounts poll successfully and fetch nothing). A real account without an adapter fails with "arrives in Phase N"; a webhook replay without a handler records that on the event.
+- **`poll` and `ingest` workers** run 4 local workers with a 2 s backstop poll: with NOTIFY on, pg-boss otherwise drains a burst at about one job per wake (30 s backstop).
+- **Pausing** (Settings → Sync) stops scheduled polls and "Run now"; webhooks are still stored.
+- **Settings sections** (`packages/core/src/settings/sections.ts`): one zod schema per tab, shared by api and web. Secrets live under `secrets` in the section JSON as `{ enc, last4 }` with AAD `orgId|settings|<section>.<key>`; the browser only sees `{ set, last4 }`, and a PUT sends a new value or `null` to remove one. Saves are compare-and-swap on `Settings.version` (409 on conflict), audited as a diff of changed top-level keys (secrets only as `set`/`cleared`), and broadcast as `settings.changed`.
 
 ## 13. API surface (Hono)
 
-| Group       | Routes                                                                                                                                                                                                                                                                                                                                                                             |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Health      | `GET /health`                                                                                                                                                                                                                                                                                                                                                                      |
-| Auth        | `GET,POST /api/auth/*` (better-auth)                                                                                                                                                                                                                                                                                                                                               |
-| Inbox       | `GET /api/items?view=inbox\|done\|filtered&…` (filters, sort, offset cursor, per-view counts + `followUps`), `GET /api/items/follow-ups` (engaged threads, new activity first), `GET /api/items/:id` (whole thread incl. our replies, matched rules, reply window, `link`), `POST /api/items/:id/{resolve,ignore,reopen,archive,restore,hide-similar}`; `reply` arrives in Phase 4 |
-| Filters     | `GET/POST /api/filters`, `PUT/PATCH/DELETE /api/filters/:id`, `POST /api/filters/{reorder,test,apply}`, `GET/POST /api/lists`, `DELETE /api/lists/:id`                                                                                                                                                                                                                             |
-| Settings    | `GET/PUT /api/settings/:section`, `POST /api/settings/slack/test`, `POST /api/sync/:id/run`                                                                                                                                                                                                                                                                                        |
-| Connections | `GET /api/connections`, `POST /api/connections/:id/{test,disconnect}`, `GET /oauth/:platform/{start,callback}`                                                                                                                                                                                                                                                                     |
-| Live        | `GET /api/stream` (SSE, org-scoped, heartbeat every 20 s)                                                                                                                                                                                                                                                                                                                          |
-| Activity    | `GET /api/activity/{webhooks,jobs,audit}`, `POST /api/webhooks/:id/replay`                                                                                                                                                                                                                                                                                                         |
-| Webhooks    | `GET,POST /webhooks/meta`, `GET,POST /webhooks/linkedin`, `POST /webhooks/google`, `POST /slack/events`, `POST /slack/interactions`                                                                                                                                                                                                                                                |
+| Group       | Routes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health      | `GET /health`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Auth        | `GET,POST /api/auth/*` (better-auth)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Inbox       | `GET /api/items?view=inbox\|done\|filtered&…` (filters, sort, offset cursor, per-view counts + `followUps`), `GET /api/items/follow-ups` (engaged threads, new activity first), `GET /api/items/:id` (whole thread incl. our replies, matched rules, reply window, `link`), `POST /api/items/:id/{resolve,ignore,reopen,archive,restore,hide-similar}`; `POST /api/items/:id/reply`, `POST /api/items/:id/replies/:replyId/cancel` (undo), `POST /api/items/:id/drafts` (AI, regenerate) (Phase 4) |
+| Filters     | `GET/POST /api/filters`, `PUT/PATCH/DELETE /api/filters/:id`, `POST /api/filters/{reorder,test,apply}`, `GET/POST /api/lists`, `DELETE /api/lists/:id`                                                                                                                                                                                                                                                                                                                                             |
+| Settings    | `GET/PUT /api/settings/:section`, `POST /api/settings/ai/test`, `POST /api/settings/slack/test`, `POST /api/sync/:id/run`                                                                                                                                                                                                                                                                                                                                                                          |
+| Connections | `GET /api/connections`, `PATCH /api/connections/:id` (include), `POST /api/connections/:id/{test,disconnect}`, `GET /api/oauth/:platform/{start,callback}` (redirect URI on the web domain: `WEB_URL/api/oauth/<platform>/callback`, Phase 4)                                                                                                                                                                                                                                                      |
+| Live        | `GET /api/stream` (SSE, org-scoped, heartbeat every 20 s)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Activity    | `GET /api/activity/{webhooks,jobs,audit}`, `POST /api/webhooks/:id/replay`                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Webhooks    | `GET,POST /webhooks/meta`, `GET,POST /webhooks/linkedin`, `POST /webhooks/google`, `POST /slack/events`, `POST /slack/interactions`                                                                                                                                                                                                                                                                                                                                                                |
 
 Every body is validated with `@hono/zod-validator` against `packages/core` schemas. Every request gets a `requestId` (header `x-request-id`, propagated into job data).
 

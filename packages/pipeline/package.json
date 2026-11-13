@@ -13,15 +13,20 @@
     "seed": "tsx src/seed/run.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.92",
+    "@ai-sdk/google": "4.0.108",
+    "@ai-sdk/openai": "4.0.105",
     "@inbox/core": "workspace:*",
-    "@inbox/db": "workspace:*"
+    "@inbox/db": "workspace:*",
+    "ai": "7.0.157",
+    "zod": "~4.6.7"
   },
   "devDependencies": {
     "@inbox/config": "workspace:*",
     "@types/node": "~24.19.2",
     "eslint": "~9.39.5",
+    "tsx": "~4.23.15",
     "typescript": "6.0.3",
-    "vitest": "~5.1.0",
-    "tsx": "~4.23.15"
+    "vitest": "~5.1.0"
   }
 }

@@ -6,7 +6,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./logger": "./src/logger.ts"
+    "./logger": "./src/logger.ts",
+    "./crypto": "./src/crypto.ts"
   },
   "scripts": {
     "lint": "eslint .",

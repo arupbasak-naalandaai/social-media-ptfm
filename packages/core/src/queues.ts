@@ -10,6 +10,8 @@ export const QUEUES = {
   sendReply: "send-reply",
   poll: "poll",
   tokenRefresh: "token-refresh",
+  /** Data retention clean-up (Settings → Data). */
+  maintenance: "maintenance",
 } as const
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES]
@@ -38,12 +40,21 @@ export const QUEUE_CONFIG: readonly QueueConfig[] = [
   // A platform 2xx followed by a crash must not re-post publicly. The handler records
   // externalReplyId before acking and checks Reply.idempotencyKey on retry.
   { name: QUEUES.sendReply, policy: "standard", retryLimit: 3, retryDelay: 15, retryDelayMax: 600 },
-  { name: QUEUES.poll, policy: "singleton", retryLimit: 2, retryDelay: 30, retryDelayMax: 900 },
+  // No pg-boss retries: a failed poll is recorded on its SyncState and the scheduler retries it
+  // with backoff (min(interval × 2^failures, 6 h)). One active poll per sync state (singleton).
+  { name: QUEUES.poll, policy: "singleton", retryLimit: 0, retryDelay: 30, retryDelayMax: 900 },
   {
     name: QUEUES.tokenRefresh,
     policy: "singleton",
     retryLimit: 3,
     retryDelay: 60,
+    retryDelayMax: 3600,
+  },
+  {
+    name: QUEUES.maintenance,
+    policy: "singleton",
+    retryLimit: 2,
+    retryDelay: 300,
     retryDelayMax: 3600,
   },
 ]
@@ -55,5 +66,46 @@ export type FilterJobData = {
   /** Re-run all rules over the organization's stored items (after a rule/list change). */
   kind: "refilter"
   organizationId: string
+  requestId?: string | undefined
+}
+
+/** Job payload for the `poll` queue (enqueued by the scheduler or "Run now"). */
+export type PollJobData = {
+  organizationId: string
+  syncStateId: string
+  /** "schedule" (due), "manual" (Run now) or "webhook" (a push said something changed). */
+  trigger: "schedule" | "manual" | "webhook"
+  requestId?: string | undefined
+}
+
+/** Job payload for the `token-refresh` queue. */
+export type TokenRefreshJobData = { organizationId: string }
+
+/** Job payload for the `maintenance` queue. */
+export type MaintenanceJobData = { organizationId: string; kind: "retention" }
+
+/** Job payload for the `ingest` queue. */
+export type IngestJobData = {
+  kind: "webhook"
+  organizationId?: string | undefined
+  webhookEventId: string
+  /** True when someone pressed Replay in the Activity log. */
+  replay?: boolean | undefined
+  requestId?: string | undefined
+}
+
+/** Job payload for the `ai-draft` queue. */
+export type AiDraftJobData = {
+  organizationId: string
+  itemId: string
+  /** Regenerate even when drafts exist (the "Regenerate" button). */
+  force?: boolean | undefined
+  requestId?: string | undefined
+}
+
+/** Job payload for the `send-reply` queue. */
+export type SendReplyJobData = {
+  organizationId: string
+  replyId: string
   requestId?: string | undefined
 }

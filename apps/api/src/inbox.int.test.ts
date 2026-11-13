@@ -30,6 +30,10 @@ const inlineJobs: JobSender = {
   enqueueRefilter: async (orgId) => {
     await refilterOrganization(prisma!, orgId)
   },
+  enqueuePoll: async () => {},
+  enqueueIngest: async () => {},
+  enqueueAiDraft: async () => {},
+  enqueueSendReply: async () => {},
   stop: async () => {},
 }
 

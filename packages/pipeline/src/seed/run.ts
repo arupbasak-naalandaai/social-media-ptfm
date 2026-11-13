@@ -21,6 +21,7 @@ import { createLogger } from "@inbox/core/logger"
 import { createPrismaClient, type Prisma } from "@inbox/db"
 import { loadFilterSetup } from "../context"
 import { ingestNormalizedItem } from "../ingest"
+import { ensureSyncStates } from "../sync"
 import { markLaterItemsAsFollowUps } from "../threads"
 import { buildSeedItems, SEED_ACCOUNTS } from "./fixtures"
 
@@ -153,6 +154,9 @@ async function main() {
     accountIds.set(a.key, acc.id)
   }
 
+  // Sync schedules for the demo accounts (the scheduler runs them; demo polls fetch nothing).
+  const syncStatesCreated = await ensureSyncStates(prisma, organizationId)
+
   // 5. Items through the real pipeline.
   const setup = await loadFilterSetup(prisma, organizationId, logger)
   const counts = {
@@ -204,7 +208,13 @@ async function main() {
   }
 
   logger.info(
-    { organizationId, rulesCreated: createdRules, listEntriesCreated: listResult.count, ...counts },
+    {
+      organizationId,
+      rulesCreated: createdRules,
+      listEntriesCreated: listResult.count,
+      syncStatesCreated,
+      ...counts,
+    },
     "seed complete",
   )
 }

@@ -1,0 +1,44 @@
+{
+  "reviews": [
+    {
+      "name": "accounts/111/locations/222/reviews/rev-edited",
+      "reviewId": "rev-edited",
+      "reviewer": {
+        "displayName": "Ana Souza",
+        "profilePhotoUrl": "https://lh3.googleusercontent.com/a/ana",
+        "isAnonymous": false
+      },
+      "starRating": "TWO",
+      "comment": "(Translated by Google) The pasta was cold.\n\n(Original)\nA massa estava fria.",
+      "createTime": "2026-11-10T09:00:00.000Z",
+      "updateTime": "2026-11-12T18:30:00.000Z",
+      "reviewReplyUrl": "https://business.google.com/reviews/reply/rev-edited"
+    },
+    {
+      "name": "accounts/111/locations/222/reviews/rev-rating-only",
+      "reviewId": "rev-rating-only",
+      "reviewer": { "isAnonymous": true },
+      "starRating": "FIVE",
+      "createTime": "2026-11-11T12:00:00.000Z",
+      "updateTime": "2026-11-11T12:00:00.000Z"
+    },
+    {
+      "name": "accounts/111/locations/222/reviews/rev-replied",
+      "reviewId": "rev-replied",
+      "reviewer": { "displayName": "Tom Becker" },
+      "starRating": "FOUR",
+      "comment": "Lovely staff, a bit loud on Fridays.",
+      "createTime": "2026-11-01T20:00:00.000Z",
+      "updateTime": "2026-11-01T20:00:30.000Z",
+      "reviewReply": {
+        "comment": "Thanks Tom!",
+        "updateTime": "2026-11-02T08:00:00.000Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "someNewField": { "kept": true }
+    }
+  ],
+  "averageRating": 3.7,
+  "totalReviewCount": 3,
+  "nextPageToken": "page-2"
+}
