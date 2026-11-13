@@ -114,7 +114,7 @@ export async function queueReply(
   const replies = parseSectionValues("replies", settings?.replies)
   const text = withSignature(input.text, item.type as ItemType, replies)
   if (!text) throw new ReplyRejected("Write a reply first", 400)
-  const tooLong = replyLengthError(platform, text)
+  const tooLong = replyLengthError(platform, text, item.type as ItemType)
   if (tooLong) throw new ReplyRejected(tooLong, 400)
 
   const draft = input.draftId
@@ -176,7 +176,16 @@ export interface ReplySender {
   idempotent: boolean
   send(ctx: {
     reply: Reply
-    item: { id: string; externalId: string; type: string; platform: string; raw: unknown }
+    item: {
+      id: string
+      externalId: string
+      parentExternalId: string | null
+      type: string
+      platform: string
+      raw: unknown
+      /** DMs: who the reply goes to (Messenger PSID / Instagram IGSID). */
+      conversation: { customerId: string; externalThreadId: string } | null
+    }
     account: PlatformAccount
   }): Promise<{ externalReplyId: string | null }>
 }
@@ -208,9 +217,11 @@ export async function sendQueuedReply(
           id: true,
           organizationId: true,
           externalId: true,
+          parentExternalId: true,
           type: true,
           platform: true,
           raw: true,
+          conversation: { select: { customerId: true, externalThreadId: true } },
           threadKey: true,
           receivedAt: true,
           platformAccount: true,

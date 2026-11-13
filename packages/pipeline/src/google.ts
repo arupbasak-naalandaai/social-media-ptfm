@@ -125,13 +125,15 @@ export function googleAuthUrl(args: {
   redirectUri: string
   state: string
   codeChallenge: string
+  /** Defaults to Business Profile; YouTube passes its own scope. */
+  scope?: string
   loginHint?: string | undefined
 }): string {
   const params = new URLSearchParams({
     client_id: args.clientId,
     redirect_uri: args.redirectUri,
     response_type: "code",
-    scope: GBP_SCOPE,
+    scope: args.scope ?? GBP_SCOPE,
     access_type: "offline",
     // Without consent, a repeat connection gets no refresh token.
     prompt: "consent",

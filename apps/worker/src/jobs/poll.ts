@@ -3,15 +3,10 @@ import { QUEUES, syncStreamKeyFor, type PollJobData } from "@inbox/core"
 import type { Keyring } from "@inbox/core/crypto"
 import type { Logger } from "@inbox/core/logger"
 import type { PrismaClient } from "@inbox/db"
-import {
-  ingestNormalizedItem,
-  loadFilterSetup,
-  notifyInbox,
-  recordPollResult,
-} from "@inbox/pipeline"
+import { notifyInbox, recordPollResult } from "@inbox/pipeline"
 import { BURSTY_QUEUE_WORK } from "../boss"
 import { pollAdapterFor } from "../sync/adapters"
-import { enqueueDraftsOnArrival } from "./ai-draft"
+import { ingestItems } from "./ingest-items"
 
 /**
  * `poll` queue: fetch new items for one SyncState, ingest them, and record the result
@@ -63,33 +58,11 @@ export async function registerPollWorker(
         signal: job.signal,
       })
 
-      const itemIds: string[] = []
-      const createdIds: string[] = []
-      if (result.items.length) {
-        const setup = await loadFilterSetup(prisma, organizationId, log)
-        for (const item of result.items) {
-          const res = await ingestNormalizedItem(prisma, {
-            organizationId,
-            platformAccountId: account.id,
-            item,
-            setup,
-          })
-          if (res.outcome === "created" || res.outcome === "updated") itemIds.push(res.itemId)
-          if (res.outcome === "created") {
-            created++
-            createdIds.push(res.itemId)
-          }
-        }
-      }
-      if (itemIds.length) {
-        await notifyInbox(prisma, {
-          type: "items.changed",
-          organizationId,
-          itemIds,
-          reason: "synced",
-        })
-      }
-      await enqueueDraftsOnArrival(boss, prisma, organizationId, createdIds)
+      const res = await ingestItems(
+        { boss, prisma, logger: log },
+        { organizationId, platformAccountId: account.id, items: result.items },
+      )
+      created = res.created
       outcome = { ok: true, cursor: result.cursor, quotaUnits: result.quotaUnits }
     } catch (err) {
       outcome = { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -107,6 +80,6 @@ export async function registerPollWorker(
       throw new Error(outcome.error)
     }
     log.debug({ created, trigger: job.data.trigger }, "poll done")
-    return { created, fetched: created }
+    return { created }
   })
 }

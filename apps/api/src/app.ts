@@ -63,6 +63,7 @@ export function createApp(deps: AppDeps) {
         prisma: deps.prisma,
         jobs: deps.jobs,
         logger: deps.logger,
+        keyring: deps.keyring,
         apiPublicUrl: deps.urls?.apiPublicUrl ?? "",
         ...(deps.googleJwks ? { googleJwks: deps.googleJwks } : {}),
       }),
@@ -83,7 +84,7 @@ export function createApp(deps: AppDeps) {
       const urls = deps.urls ?? { apiPublicUrl: "", webUrl: "" }
       app.route(
         "/api/connections",
-        connectionRoutes({ prisma: deps.prisma, keyring: deps.keyring }),
+        connectionRoutes({ prisma: deps.prisma, keyring: deps.keyring, urls }),
       )
       app.route(
         "/api/oauth",

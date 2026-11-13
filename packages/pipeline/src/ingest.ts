@@ -141,6 +141,8 @@ async function upsertConversation(
 ): Promise<string> {
   const c = item.conversation!
   const fromCustomer = !item.isOwnAccount
+  // The reply window runs from the customer's message time, not when we fetched it.
+  const at = item.platformCreatedAt ?? item.receivedAt
   const conv = await prisma.conversation.upsert({
     where: {
       organizationId_platform_platformAccountId_externalThreadId: {
@@ -157,18 +159,16 @@ async function upsertConversation(
       externalThreadId: c.externalThreadId,
       customerId: c.customerId,
       customerName: c.customerName,
-      customerLastMessageAt: fromCustomer ? item.receivedAt : null,
+      customerLastMessageAt: fromCustomer ? at : null,
     },
-    update: fromCustomer
-      ? { customerLastMessageAt: item.receivedAt, customerName: c.customerName }
-      : {},
+    update: fromCustomer ? { customerName: c.customerName ?? undefined } : {},
     select: { id: true, customerLastMessageAt: true },
   })
   // Keep the latest customer message time (events can arrive out of order).
-  if (fromCustomer && conv.customerLastMessageAt && conv.customerLastMessageAt < item.receivedAt) {
+  if (fromCustomer && (!conv.customerLastMessageAt || conv.customerLastMessageAt < at)) {
     await prisma.conversation.update({
       where: { id: conv.id },
-      data: { customerLastMessageAt: item.receivedAt },
+      data: { customerLastMessageAt: at },
     })
   }
   return conv.id

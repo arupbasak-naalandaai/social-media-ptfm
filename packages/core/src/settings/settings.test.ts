@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   SECTION_SCHEMAS,
+  AI_PROVIDER_SECRET,
   SECTION_SECRETS,
   SETTINGS_SECTIONS,
   parseSectionSecrets,
@@ -180,6 +181,7 @@ describe("secrets", () => {
       anthropicApiKey: { set: false, last4: null },
       openaiApiKey: { set: true, last4: "wxyz" },
       googleApiKey: { set: false, last4: null },
+      openrouterApiKey: { set: false, last4: null },
     })
     expect(JSON.stringify(statuses)).not.toContain("v1:")
   })
@@ -207,7 +209,7 @@ describe("secrets", () => {
   })
 
   it("every section with secrets lists them", () => {
-    expect(SECTION_SECRETS.ai).toHaveLength(3)
+    expect([...SECTION_SECRETS.ai].sort()).toEqual(Object.values(AI_PROVIDER_SECRET).sort())
     expect(SECTION_SECRETS.slack).toEqual(["botToken", "signingSecret"])
   })
 })

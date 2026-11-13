@@ -17,6 +17,7 @@
     "db:migrate": "pnpm --filter @inbox/db migrate:dev",
     "db:deploy": "pnpm --filter @inbox/db migrate:deploy",
     "db:seed": "pnpm --filter @inbox/pipeline seed",
+    "simulate:webhook": "pnpm --filter @inbox/pipeline simulate:webhook",
     "db:studio": "pnpm --filter @inbox/db studio",
     "auth:generate": "pnpm --filter @inbox/auth schema:generate",
     "gen:key": "node scripts/gen-encryption-key.mjs"

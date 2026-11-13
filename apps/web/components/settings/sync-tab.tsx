@@ -279,7 +279,7 @@ function QuotaMeter({
 // ─── Live status ───────────────────────────────────────────────────────────────
 
 /** Re-render every 30 s so "in 4 min" stays accurate. */
-function useNow(intervalMs = 30_000): number {
+export function useNow(intervalMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), intervalMs)

@@ -477,12 +477,28 @@ export interface ReplyQueuedResponse {
 
 // ─── Connections ──────────────────────────────────────────────────────────────
 
+/** One sync stream of a connected account (Settings → Sync shows all of them). */
+export interface ConnectionStreamDto {
+  syncStateId: string
+  key: SyncStreamKey
+  label: string
+  mode: SyncMode
+  lastRunAt: string | null
+  lastSuccessAt: string | null
+  nextRunAt: string
+  lastError: string | null
+  consecutiveFailures: number
+  /** YouTube units used today (Pacific day). */
+  quotaUsedToday: number
+}
+
 export interface ConnectionDto {
   id: string
   platform: Platform
   kind: AccountKind
   displayName: string
-  /** e.g. the Google account a location belongs to. */
+  avatarUrl: string | null
+  /** e.g. the Google account a location belongs to, or the Page an Instagram account uses. */
   parentName: string | null
   status: "connected" | "expiring" | "error" | "disconnected"
   included: boolean
@@ -494,12 +510,37 @@ export interface ConnectionDto {
   /** "Open in …" link for the account, when known. */
   url: string | null
   createdAt: string
+  streams: ConnectionStreamDto[]
+}
+
+export type WebhookSource = "meta" | "google"
+
+/** Last deliveries per webhook source, so setup problems are visible on the Connections page. */
+export interface WebhookHealthDto {
+  lastReceivedAt: string | null
+  /** Last delivery that passed signature/token verification. */
+  lastValidAt: string | null
+  /** Deliveries that failed verification in the last 24 h. */
+  invalidLast24h: number
+  /** Last processing error, if the latest processed delivery failed. */
+  lastError: string | null
 }
 
 export interface ConnectionsResponse {
   accounts: ConnectionDto[]
-  /** Whether each platform's app credentials are set in Settings → Connections. */
-  configured: { google: boolean; meta: boolean; linkedin: boolean }
+  /** Whether each provider's app credentials are set in Settings → Connections. */
+  configured: { google: boolean; youtube: boolean; meta: boolean; linkedin: boolean }
+  webhooks: Record<WebhookSource, WebhookHealthDto>
+  /** What to paste into each platform's developer console. */
+  setup: {
+    apiPublicUrl: string
+    /** Webhooks can't reach a localhost / http URL. */
+    publicUrlReachable: boolean
+    webhookUrls: Record<WebhookSource, string>
+    redirectUris: { google: string; meta: string }
+    metaVerifyTokenSet: boolean
+    googlePubsubTopicSet: boolean
+  }
 }
 
 export const connectionPatchSchema = z.object({ included: z.boolean() })

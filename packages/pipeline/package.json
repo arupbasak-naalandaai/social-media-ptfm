@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "seed": "tsx src/seed/run.ts"
+    "seed": "tsx src/seed/run.ts",
+    "simulate:webhook": "tsx src/dev/simulate-webhook.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.92",
@@ -18,6 +19,7 @@
     "@ai-sdk/openai": "4.0.105",
     "@inbox/core": "workspace:*",
     "@inbox/db": "workspace:*",
+    "@openrouter/ai-sdk-provider": "3.1.0",
     "ai": "7.0.157",
     "zod": "~4.6.7"
   },

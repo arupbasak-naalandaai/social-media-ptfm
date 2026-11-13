@@ -11,9 +11,9 @@
 | 2. Filters + Inbox on seed data | ✅ Done     | 2026-11-12. Acceptance verified in the browser and in API integration tests                        |
 | 3. Settings + scheduler         | ✅ Done     | 2026-11-13. Acceptance verified in the browser and in API integration tests                        |
 | 4. Google reviews + AI drafts   | 🟡 Built    | 2026-11-13. Code + tests done. Acceptance needs your GBP API access, OAuth client and a public URL |
-| 5. Meta comments                | ⏳          | Needs Meta App Review + Phase D                                                                    |
-| 6. YouTube                      | ⏳          | Polling only: works locally                                                                        |
-| 7. Meta DMs                     | ⏳          | Needs Meta App Review (messaging)                                                                  |
+| 5. Meta comments                | 🟡 Built    | 2026-11-13. Code + tests; webhook path checked locally with signed fixtures. Needs your Meta app   |
+| 6. YouTube                      | 🟡 Built    | 2026-11-13. Code + tests. Acceptance needs your Google OAuth client + a channel                    |
+| 7. Meta DMs                     | 🟡 Built    | 2026-11-13. Code + tests; DM → reply checked locally on demo accounts. Needs your Meta app         |
 | 8. Slack                        | 💤 Deferred | Not in MVP                                                                                         |
 | 9. LinkedIn comments            | ⏳          | Needs Community Management API approval + Phase D                                                  |
 | 10. Analytics                   | ⏳          |                                                                                                    |
@@ -233,6 +233,51 @@ Requested after Phase 2: a separate section for people you already interacted wi
 - The browser checks sent replies on two seeded demo reviews in the dev DB (nothing was posted anywhere). `pnpm db:seed --reset` restores the demo data.
 - **Not built yet:** marking an item handled when its owner reply was posted in Google directly (the reply is kept in `raw.reviewReply`), and deleting a reply.
 
+## Phases 5–7: Meta comments, YouTube, Meta DMs + Connections hub (2026-11-13)
+
+**Acceptance (not run yet: needs your apps):** 5 "Comments arrive by webhook and replies post" · 6 "Comments within one interval; quota meter accurate" · 7 "DM threads shown as conversations; expired window blocks send". Everything up to the platforms' servers is built and tested against stubs, and the webhook → inbox → reply path was run on the local stack with signed fixtures.
+
+| Check                  | Result                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Meta webhooks          | ✅ Tests: handshake only with the right verify token; `X-Hub-Signature-256` HMAC on the raw body; Meta retries de-duplicated (body hash); bad signatures stored, 401, never ingested                                                       |
+| Meta connect           | ✅ Test (Graph stubbed): code → long-lived user token → Pages with non-expiring Page tokens + linked IG accounts; Pages subscribed to `feed,messages,message_echoes`; declined permissions and Pages without a token reported as a warning |
+| Comments + DMs → inbox | ✅ Local stack: `pnpm simulate:webhook meta {fb-comment,ig-comment,fb-dm,ig-dm}` → Activity log (valid, processed) → items in the inbox; DMs grouped by customer with the reply-window clock set from the message time                     |
+| Replies                | ✅ Local: DM reply on the demo Page → queued → worker → `sent`, item `Replied`. Tests: comment/DM endpoints, closed messaging window (#10/2018278) is final with a hint, rate limits retry, code 190 → "Reconnect"                         |
+| Reconcile              | ✅ Tests: FB comments (recent posts updated since the cursor), IG comments + replies, Messenger/IG conversations (`platform=instagram`); webhook and reconcile produce the same ids (no duplicates)                                        |
+| YouTube                | ✅ Tests: connect via the Google callback with the YouTube scope; polling newest-first to the cursor, inline + paged replies, quota units counted (1/page, 50/reply), `quotaExceeded` is final with a reset hint                           |
+| Connections page       | ✅ Headless Chromium at 1400 px (light) and 390 px (dark): no console errors, no horizontal scroll                                                                                                                                         |
+| Whole repo             | ✅ lint, typecheck, Prettier, production build, 689 tests (core 588, api 57, pipeline 37, auth 7)                                                                                                                                          |
+
+### What was built
+
+- **`@inbox/core`:** `adapters/meta` (webhook + Graph schemas, normalizers for feed comments, IG comments, Messenger/IG DMs incl. echoes/edits/attachments, reconcile nodes) and `adapters/youtube` (schemas, `normalizeYtComment`, `YOUTUBE_SCOPE`). DM length limits (Messenger 2000, IG DM 1000) in `replyLengthError`/drafts. Fixtures in `fixtures/meta` and `fixtures/youtube`.
+- **`@inbox/pipeline`:** `meta.ts` (Graph client with `appsecret_proof`, OAuth, Page subscription, signature verify, reconcile fetchers, comment/DM replies, error mapping) and `youtube.ts` (channels, polling with quota, `comments.insert`, `addYoutubeQuota`). Reply senders now get the item's parent comment and DM conversation. The DM window runs from the customer's message time (`platformCreatedAt`).
+- **Worker:** `meta/` (webhook handler for comments + DMs, 4 reconcile adapters, FB/IG senders) and `youtube/` (poll adapter, sender). Polls and webhooks share one `ingestItems` (filter → store → NOTIFY → drafts).
+- **API:** `GET/POST /webhooks/meta`; `/api/oauth/meta/{start,callback}` and `/api/oauth/youtube/start` (finishes on the Google callback); Test works for every platform (Meta Test re-subscribes missing webhook fields); `GET /api/connections` returns per-account sync streams, webhook health and setup URLs.
+- **Web, Connections hub:** a summary bar (connected / syncing / problems, public-URL warning), a **Setup checklist** per provider (credentials, redirect URI and webhook URL to copy, verify token, last webhook received, App Review note, YouTube quota today), and per-account **stream status** (last sync, next run, failures) with **Sync now**. Settings → Connections → Meta has an optional Facebook Login for Business **configuration ID**.
+- **Dev tool:** `pnpm simulate:webhook meta <fixture> [--account <id>] [--text "…"]` signs a fixture with the workspace's Meta app secret and posts it to the local api (fresh ids each run). Seeded demo accounts accept simulated deliveries.
+
+### Decisions and deviations
+
+- **Instagram through Facebook Login** (Pages' linked IG professional accounts, Page token, `graph.facebook.com`), not "Instagram API with Unified Login": one connect button and one token covers FB + IG comments and DMs. IG DMs are sent via `POST /{page-id}/messages`.
+- **Meta redirect URI on the web domain** (`WEB_URL/api/oauth/meta/callback`), like Google. **YouTube reuses the Google callback** (state says which product), so the Google OAuth client needs one redirect URI.
+- **Replies to replies** go under the top-level comment (FB, IG and YouTube nest one level).
+- **Meta deliveries are de-duplicated by a SHA-256 of the raw body** (Meta sends no delivery id; retries resend the same bytes).
+- **Page tokens don't expire** (`tokenExpiresAt` null); an invalid token (code 190) marks the account "Reconnect".
+- **YouTube polling** reads up to `pagesPerPoll` pages of threads newest-first and stops at the cursor, so replies on threads older than those pages are missed until a new top-level comment pushes them in. Quota failures of a partial poll aren't counted.
+
+### Needed from you (to run the acceptance)
+
+1. **Meta app** (Business type) with Facebook Login (or Login for Business + a configuration ID), Webhooks, Messenger and Instagram products. App ID + secret + a verify token in Settings → Connections. Add the redirect URI and the webhook URL shown on the Connections page; subscribe Page fields `feed, messages, message_echoes` and Instagram fields `comments, messages`.
+2. **A public HTTPS API URL** (Phase D) for real webhooks. Without it, comments and DMs still arrive on the reconcile schedule (60 min by default; "Sync now" on the Connections page).
+3. **App Review / Advanced Access** for other people's Pages and for IG comment webhooks. Until then, connect with an account that has a role on the app.
+4. **YouTube:** enable YouTube Data API v3 in the same GCP project and click Connect on the YouTube card.
+
+### Known notes
+
+- Simulated items are in the dev DB (5 items, 2 conversations, 1 demo reply). `pnpm db:seed --reset` removes them.
+- Own-account echoes and comments are dropped by the default "own activity" rule, so a DM thread shows replies sent from here, not ones typed in the Meta inbox.
+
 ## Open questions
 
 - Phase 4 acceptance is blocked on the items under "Needed from you" above (GBP API access, OAuth client, AI key; a public URL for real-time push).
@@ -272,3 +317,5 @@ Requested after Phase 2: a separate section for people you already interacted wi
 | 2026-11-13 | Google OAuth redirect URI on the web domain (`/api/oauth/google/callback`), state + PKCE stored server-side; tokens stored per location row               |
 | 2026-11-13 | AI SDK 7 + providers and `jose` pinned exactly to patches ≥ 2 weeks old                                                                                   |
 | 2026-11-13 | Pub/Sub pushes only trigger a reconcile poll (payload undocumented); demo accounts can "send" replies (nothing posted)                                    |
+| 2026-11-13 | Instagram via Facebook Login (linked IG accounts, Page token) instead of Unified Login; Meta + YouTube redirect URIs on the web domain                    |
+| 2026-11-13 | Meta webhook dedupe = SHA-256 of the raw body; polls and webhooks share one ingest path; `simulate:webhook` dev script for local checks                   |

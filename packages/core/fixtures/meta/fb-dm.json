@@ -1,0 +1,17 @@
+{
+  "object": "page",
+  "entry": [
+    {
+      "id": "fb-page-demo",
+      "time": 1763030200000,
+      "messaging": [
+        {
+          "sender": { "id": "24000000000000001" },
+          "recipient": { "id": "fb-page-demo" },
+          "timestamp": 1763030200000,
+          "message": { "mid": "m_fbdm_0001", "text": "Hi! Can I book a table for 6 tonight?" }
+        }
+      ]
+    }
+  ]
+}

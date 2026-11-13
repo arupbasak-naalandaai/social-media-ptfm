@@ -1,0 +1,59 @@
+{
+  "items": [
+    {
+      "id": "UgzThread2",
+      "snippet": {
+        "channelId": "UC-demo-channel",
+        "videoId": "vid123",
+        "totalReplyCount": 1,
+        "canReply": true,
+        "topLevelComment": {
+          "id": "UgzThread2",
+          "snippet": {
+            "authorDisplayName": "Meera K",
+            "authorChannelUrl": "http://www.youtube.com/@meerak",
+            "authorChannelId": { "value": "UCmeera" },
+            "videoId": "vid123",
+            "textOriginal": "Which pan did you use for the dosa?",
+            "textDisplay": "Which pan did you use for the dosa?",
+            "publishedAt": "2026-11-13T10:00:00Z",
+            "updatedAt": "2026-11-13T10:00:00Z"
+          }
+        }
+      },
+      "replies": {
+        "comments": [
+          {
+            "id": "UgzThread2.reply1",
+            "snippet": {
+              "authorDisplayName": "Demo Bistro Kitchen",
+              "authorChannelId": { "value": "UC-demo-channel" },
+              "videoId": "vid123",
+              "parentId": "UgzThread2",
+              "textDisplay": "A cast-iron tawa!",
+              "publishedAt": "2026-11-13T10:30:00Z"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "UgzThread1",
+      "snippet": {
+        "channelId": "UC-demo-channel",
+        "videoId": "vid123",
+        "totalReplyCount": 0,
+        "topLevelComment": {
+          "id": "UgzThread1",
+          "snippet": {
+            "authorDisplayName": "Old Comment",
+            "authorChannelId": { "value": "UCold" },
+            "videoId": "vid123",
+            "textDisplay": "first!",
+            "publishedAt": "2026-11-01T08:00:00Z"
+          }
+        }
+      }
+    }
+  ]
+}

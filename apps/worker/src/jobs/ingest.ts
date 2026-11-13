@@ -1,16 +1,18 @@
 import type { PgBoss } from "pg-boss"
 import { QUEUES, type IngestJobData } from "@inbox/core"
+import type { Keyring } from "@inbox/core/crypto"
 import type { Logger } from "@inbox/core/logger"
 import type { PrismaClient, WebhookEvent } from "@inbox/db"
 import { BURSTY_QUEUE_WORK } from "../boss"
 
 /**
- * Turns one stored webhook delivery into inbox items. Registered per source as each platform
- * phase lands (Google in Phase 4, Meta in 5 and 7, LinkedIn in 9).
+ * Turns one stored webhook delivery into inbox items. Registered per source (Google, Meta;
+ * LinkedIn in Phase 9).
  */
 export type WebhookHandler = (ctx: {
   prisma: PrismaClient
   boss: PgBoss
+  keyring: Keyring
   logger: Logger
   event: WebhookEvent
 }) => Promise<Record<string, unknown>>
@@ -26,7 +28,12 @@ export function registerWebhookHandler(source: string, handler: WebhookHandler):
  * `ingest` queue: process a stored WebhookEvent (new deliveries and "Replay" from the
  * Activity log). The outcome is recorded on the event so the Activity log shows it.
  */
-export async function registerIngestWorker(boss: PgBoss, prisma: PrismaClient, logger: Logger) {
+export async function registerIngestWorker(
+  boss: PgBoss,
+  prisma: PrismaClient,
+  keyring: Keyring,
+  logger: Logger,
+) {
   await boss.work<IngestJobData>(QUEUES.ingest, BURSTY_QUEUE_WORK, async ([job]) => {
     if (!job) return
     const log = logger.child({
@@ -54,7 +61,7 @@ export async function registerIngestWorker(boss: PgBoss, prisma: PrismaClient, l
     }
 
     try {
-      const result = await handler({ prisma, boss, logger: log, event })
+      const result = await handler({ prisma, boss, keyring, logger: log, event })
       await prisma.webhookEvent.update({
         where: { id: event.id },
         data: { attempts: { increment: 1 }, processedAt: new Date(), error: null },

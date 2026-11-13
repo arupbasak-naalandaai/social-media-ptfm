@@ -1,13 +1,16 @@
 /**
- * AI reply drafts (PLAN §2 ingest pipeline → ai-draft job). Claude, ChatGPT and Gemini behind
- * the Vercel AI SDK; provider, model and key come from Settings → AI replies.
+ * AI reply drafts (PLAN §2 ingest pipeline → ai-draft job). Claude, ChatGPT, Gemini and
+ * OpenRouter behind the Vercel AI SDK; provider, model and key come from Settings → AI replies.
  */
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createGoogle } from "@ai-sdk/google"
 import { createOpenAI } from "@ai-sdk/openai"
+import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { APICallError, generateText, Output, type LanguageModel } from "ai"
 import {
   AI_PROVIDER_LABELS,
+  AI_PROVIDER_SECRET,
+  aiBaseUrl,
   buildDraftPrompt,
   cleanDrafts,
   draftsOutputSchema,
@@ -24,11 +27,7 @@ import type { Keyring } from "@inbox/core/crypto"
 import type { PrismaClient } from "@inbox/db"
 import { loadSettingsSection, loadSettingsSecret } from "./settings"
 
-export const AI_KEY_FOR: Record<AiProvider, "anthropicApiKey" | "openaiApiKey" | "googleApiKey"> = {
-  anthropic: "anthropicApiKey",
-  openai: "openaiApiKey",
-  google: "googleApiKey",
-}
+export const AI_KEY_FOR = AI_PROVIDER_SECRET
 
 /** Why drafting can't run, in words for the UI. Null = ready. */
 export type AiUnavailable = { reason: "disabled" | "no-key" | "no-model"; message: string }
@@ -38,6 +37,8 @@ export interface AiConfig {
   provider: AiProvider
   model: string
   apiKey: string
+  /** The endpoint in use: the Settings override, else the provider's default. */
+  baseUrl: string
 }
 
 export async function loadAiConfig(
@@ -70,7 +71,13 @@ export async function loadAiConfig(
       message: `Add a ${AI_PROVIDER_LABELS[provider]} API key in Settings → AI replies.`,
     }
   }
-  return { settings, provider, model, apiKey }
+  return {
+    settings,
+    provider,
+    model,
+    apiKey,
+    baseUrl: aiBaseUrl(provider, settings.baseUrls[provider]),
+  }
 }
 
 /**
@@ -112,14 +119,19 @@ export function languageModelFor(
   provider: AiProvider,
   model: string,
   apiKey: string,
+  /** Endpoint override; "" or omitted = the provider's default. */
+  baseUrl?: string | null,
 ): LanguageModel {
+  const baseURL = aiBaseUrl(provider, baseUrl)
   switch (provider) {
     case "anthropic":
-      return createAnthropic({ apiKey })(model)
+      return createAnthropic({ apiKey, baseURL })(model)
     case "openai":
-      return createOpenAI({ apiKey })(model)
+      return createOpenAI({ apiKey, baseURL })(model)
     case "google":
-      return createGoogle({ apiKey })(model)
+      return createGoogle({ apiKey, baseURL })(model)
+    case "openrouter":
+      return createOpenRouter({ apiKey, baseURL }).chat(model)
   }
 }
 
@@ -146,7 +158,7 @@ export async function generateDrafts({
     maxRetries: 2,
     abortSignal,
   })
-  const drafts = cleanDrafts(output?.drafts ?? [], options.count, context.platform)
+  const drafts = cleanDrafts(output?.drafts ?? [], options.count, context.platform, context.type)
   if (drafts.length === 0) throw new Error("The model returned no usable drafts")
   return drafts
 }
@@ -243,7 +255,8 @@ export async function draftRepliesForItem(
     ]),
   }
   const drafts = await generateDrafts({
-    model: args.model ?? languageModelFor(config.provider, config.model, config.apiKey),
+    model:
+      args.model ?? languageModelFor(config.provider, config.model, config.apiKey, config.baseUrl),
     context,
     options: {
       count: config.settings.draftsPerItem,

@@ -5,6 +5,8 @@ import { startBoss } from "./boss"
 import { loadEnv } from "./env"
 import { startHealthServer, type HealthState } from "./health"
 import { registerGoogle } from "./google"
+import { registerMeta } from "./meta"
+import { registerYoutube } from "./youtube"
 import { registerAiDraftWorker } from "./jobs/ai-draft"
 import { registerFilterWorker } from "./jobs/filter"
 import { registerIngestWorker } from "./jobs/ingest"
@@ -34,11 +36,13 @@ const server = startHealthServer(env.port, state, (port) =>
 const boss = await startBoss(env.DATABASE_URL, logger)
 state.bossStarted = true
 registerGoogle()
+registerMeta()
+registerYoutube()
 await registerFilterWorker(boss, prisma, logger)
 await registerPollWorker(boss, prisma, keyring, logger)
 await registerAiDraftWorker(boss, prisma, keyring, logger)
 await registerSendReplyWorker(boss, prisma, keyring, logger)
-await registerIngestWorker(boss, prisma, logger)
+await registerIngestWorker(boss, prisma, keyring, logger)
 await registerTokenRefreshWorker(boss, prisma, logger)
 await registerMaintenanceWorker(boss, prisma, logger)
 

@@ -1,6 +1,6 @@
 # Unified Social Inbox: Plan
 
-> Status: **Phase 3 done; Phase 4 built, acceptance pending (needs GBP access)** · Last updated: 2026-11-13
+> Status: **Phase 3 done; Phases 4–7 built, acceptance pending (needs GBP access, a Meta app, a YouTube channel)** · Last updated: 2026-11-13
 > Source of truth for decisions. Progress is tracked in [`PROGRESS.md`](./PROGRESS.md).
 
 ## 1. Goal
@@ -448,6 +448,8 @@ Researched 2026-11-12 from official docs. **[verify]** marks items we could not 
   - IG uses Unified Login **[verify the DM send flow in Phase 5]**.
 - **App Review.** Standard Access only works for accounts with a role on the app. Advanced Access needs App Review + business verification. **Start this in Phase 1.**
 
+**As built (Phases 5 and 7, 2026-11-13):** v26.0 is still the newest Graph version. Instagram goes through **Facebook Login** (the Page's linked IG professional account, Page token, `graph.facebook.com`) instead of Unified Login, so one connect covers both. Meta has no delivery id: deliveries are de-duplicated by a SHA-256 of the raw body. Reconcile reads the Page feed / IG media / `/{page-id}/conversations` (`platform=instagram` for IG). Replies: `/{comment}/comments`, `/{ig-comment}/replies`, and `POST /{page-id}/messages` (`messaging_type: RESPONSE`) for both Messenger and IG DMs. The token-refresh job doesn't re-subscribe Pages yet; Test on the Connections page does.
+
 ### Google Business Profile (Phase 4)
 
 _Re-verified 2026-11-13 against developers.google.com/my-business, docs.cloud.google.com/pubsub and developers.google.com/identity._
@@ -489,6 +491,8 @@ _Re-verified 2026-11-13 against developers.google.com/my-business, docs.cloud.go
 - **Replying.** `comments.insert` with `snippet.parentId` (**50 units**). Scope is `youtube.force-ssl`.
 - **Quota.** The default is 10,000 units/day, reset at midnight Pacific. That's what the quota meter uses. A 5-min interval × 1 channel × 1 page ≈ 288 units/day, which leaves room for about 190 replies.
 - **No push for comments.** PubSubHubbub covers only uploads and metadata changes, so comments are polling only.
+
+- **As built (Phase 6):** connect uses the Google OAuth client with scope `youtube.force-ssl` and finishes on the Google callback. `order=time`, `textFormat=plainText`; threads with more replies than inlined are read with `comments.list` (1 unit/page). Replies always target the top-level comment.
 
 ### LinkedIn Community Management API (Phase 9)
 
@@ -609,7 +613,7 @@ After each phase: stop, update `PROGRESS.md`, and report.
   - Crypto: round-trip, tamper, wrong AAD.
   - Settings: zod minimums.
 - **Integration:** api routes against a throwaway Postgres (Docker locally, Railway PR env later).
-- **Dev tools:** `pnpm simulate:webhook <platform> <fixture>` signs and posts fixtures to the local API. `pnpm db:seed` loads the demo org, default rules, and ~100 items.
+- **Dev tools:** `pnpm simulate:webhook meta <fixture> [--account <id>] [--text "…"]` signs and posts fixtures to the local API (built in Phase 5). `pnpm db:seed` loads the demo org, default rules, and ~100 items.
 - **Code quality:** ESLint flat config + Prettier; `strict`, `noUncheckedIndexedAccess`, and no `any` in `packages/*` (lint error). Logs are structured pino JSON with `requestId`/`jobId`/`orgId`.
 
 ## 17. Risks

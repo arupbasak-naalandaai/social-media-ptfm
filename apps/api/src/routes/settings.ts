@@ -5,6 +5,7 @@ import {
   SECTION_SECRETS,
   SETTINGS_SECTIONS,
   YOUTUBE_QUOTA_BLOCK_RATIO,
+  aiBaseUrlSchema,
   aiProviderSchema,
   estimateYoutubeDailyUnits,
   parseSectionSecrets,
@@ -13,6 +14,7 @@ import {
   secretStatuses,
   settingsSectionSchema,
   settingsUpdateSchema,
+  type AiModelOption,
   type SettingsResponse,
   type SettingsSection,
   type SettingsSectionDto,
@@ -27,6 +29,8 @@ import {
   AI_KEY_FOR,
   applySyncSettings,
   languageModelFor,
+  listAiModels,
+  loadSettingsSection,
   loadSettingsSecret,
   notifyInbox,
   settingsSecretAad,
@@ -43,10 +47,15 @@ export interface SettingsRouteDeps {
 
 class VersionConflict extends Error {}
 
-const aiTestSchema = z.object({
+/** Typed-but-unsaved key and endpoint win; otherwise the saved ones are used. */
+const aiModelsSchema = z.object({
   provider: aiProviderSchema,
-  model: z.string().trim().min(1).max(100),
   apiKey: z.string().trim().min(1).max(8192).optional(),
+  baseUrl: aiBaseUrlSchema.optional(),
+})
+
+const aiTestSchema = aiModelsSchema.extend({
+  model: z.string().trim().min(1).max(100),
 })
 
 function sectionDto<S extends SettingsSection>(
@@ -119,7 +128,7 @@ export function settingsRoutes({ prisma, keyring, urls }: SettingsRouteDeps) {
             },
             oauthRedirectUrls: {
               google: `${urls.webUrl}/api/oauth/google/callback`,
-              meta: `${api}/oauth/meta/callback`,
+              meta: `${urls.webUrl}/api/oauth/meta/callback`,
               linkedin: `${api}/oauth/linkedin/callback`,
             },
             youtubeChannels: await youtubeChannels(org.id),
@@ -139,13 +148,43 @@ export function settingsRoutes({ prisma, keyring, urls }: SettingsRouteDeps) {
         const key =
           apiKey ?? (await loadSettingsSecret(prisma, keyring, org.id, "ai", AI_KEY_FOR[provider]))
         if (!key) return c.json({ error: "Add an API key first" }, 400)
+        const baseUrl =
+          parsed.data.baseUrl ??
+          (await loadSettingsSection(prisma, org.id, "ai")).baseUrls[provider]
         try {
-          const reply = await testAiConnection(languageModelFor(provider, model, key))
+          const reply = await testAiConnection(languageModelFor(provider, model, key, baseUrl))
           return c.json({ ok: true, reply })
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           // The provider's message (e.g. "invalid x-api-key", "model not found") is the useful bit.
           return c.json({ error: `The provider said: ${message.slice(0, 300)}` }, 400)
+        }
+      })
+
+      // Settings → AI replies → model picker: the provider's live model list.
+      .post("/ai/models", async (c) => {
+        const org = c.get("org")!
+        const parsed = aiModelsSchema.safeParse(await c.req.json().catch(() => null))
+        if (!parsed.success) {
+          const endpointIssue = parsed.error.issues.find((i) => i.path[0] === "baseUrl")
+          return c.json({ error: endpointIssue?.message ?? "Choose a provider" }, 400)
+        }
+        const { provider, apiKey } = parsed.data
+        const key =
+          apiKey ?? (await loadSettingsSecret(prisma, keyring, org.id, "ai", AI_KEY_FOR[provider]))
+        // OpenRouter's model list is public; the others need a key.
+        if (!key && provider !== "openrouter") {
+          return c.json({ error: "Add an API key to load models" }, 400)
+        }
+        const baseUrl =
+          parsed.data.baseUrl ??
+          (await loadSettingsSection(prisma, org.id, "ai")).baseUrls[provider]
+        try {
+          const models: AiModelOption[] = await listAiModels({ provider, apiKey: key, baseUrl })
+          return c.json({ models })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          return c.json({ error: `Couldn't load models: ${message.slice(0, 300)}` }, 400)
         }
       })
 

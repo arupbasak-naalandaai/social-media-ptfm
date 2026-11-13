@@ -15,6 +15,8 @@ import {
   AI_PROVIDERS,
   AI_PROVIDER_LABELS,
   AI_MODEL_SUGGESTIONS,
+  AI_PROVIDER_SECRET,
+  AI_DEFAULT_BASE_URLS,
   PLATFORM_VERSIONS,
   type AiProvider,
   type SettingsResponse,
@@ -26,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { TagInput } from "@/components/app/tag-input"
 import { SimpleSelect, type SelectOption } from "@/components/filters/simple-select"
 import { api } from "@/lib/api"
+import { ModelPicker } from "./model-picker"
 import { CopyField, SecretField } from "./secret-field"
 import {
   SectionFormShell,
@@ -250,6 +253,12 @@ export function ConnectionsTab({ data }: { data: SettingsResponse }) {
             label="Graph API version"
             description={`Default ${PLATFORM_VERSIONS.metaGraphApiVersion}.`}
           />
+          <TextField
+            control={control}
+            name="meta.loginConfigId"
+            label="Login configuration ID (optional)"
+            description="For “Facebook Login for Business” apps. Blank = ask for permissions directly."
+          />
         </Grid>
         <Grid>
           <SecretField
@@ -400,18 +409,17 @@ export function FiltersTab({ data }: { data: SettingsResponse }) {
 
 // ─── AI replies ────────────────────────────────────────────────────────────────
 
-const AI_KEY: Record<AiProvider, "anthropicApiKey" | "openaiApiKey" | "googleApiKey"> = {
-  anthropic: "anthropicApiKey",
-  openai: "openaiApiKey",
-  google: "googleApiKey",
-}
+const AI_KEY = AI_PROVIDER_SECRET
 
 export function AiTab({ data }: { data: SettingsResponse }) {
   const sf = useSectionForm("ai", data)
   const { control } = sf.form
   const provider = useWatch({ control, name: "provider" }) ?? "anthropic"
   const model = useWatch({ control, name: `models.${provider}` })
+  const baseUrl = useWatch({ control, name: `baseUrls.${provider}` }) ?? ""
   const secrets = data.sections.ai.secrets
+  const typedKey = sf.secrets[AI_KEY[provider]] ?? undefined
+  const keySaved = secrets[AI_KEY[provider]].set && sf.secrets[AI_KEY[provider]] !== null
   const providerOptions = useMemo(
     () => AI_PROVIDERS.map((p) => ({ value: p, label: AI_PROVIDER_LABELS[p] })),
     [],
@@ -430,12 +438,33 @@ export function AiTab({ data }: { data: SettingsResponse }) {
             label="Provider"
             options={providerOptions}
           />
-          <TextField
+          <Controller
+            key={provider}
             control={control}
             name={`models.${provider}`}
-            label={`${AI_PROVIDER_LABELS[provider]} model`}
-            placeholder={AI_MODEL_SUGGESTIONS[provider] || "Model ID"}
-            description="The provider’s model ID. Check their docs for current ones."
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor={`settings-models-${provider}`}>
+                  {AI_PROVIDER_LABELS[provider]} model
+                </FieldLabel>
+                <ModelPicker
+                  id={`settings-models-${provider}`}
+                  provider={provider}
+                  value={String(field.value ?? "")}
+                  onChange={field.onChange}
+                  onBlur={field.onBlur}
+                  invalid={fieldState.invalid}
+                  placeholder={AI_MODEL_SUGGESTIONS[provider] || "Choose a model"}
+                  typedKey={typedKey}
+                  keySaved={keySaved}
+                  baseUrl={String(baseUrl)}
+                />
+                <FieldDescription>
+                  Pick from the provider’s live list, or type any model ID into the search box.
+                </FieldDescription>
+                {fieldState.invalid ? <FieldError errors={[fieldState.error]} /> : null}
+              </Field>
+            )}
           />
         </Grid>
         <SecretField
@@ -446,11 +475,21 @@ export function AiTab({ data }: { data: SettingsResponse }) {
           onDraft={(v) => sf.setSecret(AI_KEY[provider], v)}
           error={sf.secretErrors[AI_KEY[provider]]}
         />
+        <TextField
+          key={`base-${provider}`}
+          control={control}
+          name={`baseUrls.${provider}`}
+          label={`${AI_PROVIDER_LABELS[provider]} API endpoint`}
+          type="url"
+          placeholder={AI_DEFAULT_BASE_URLS[provider]}
+          description="Leave blank for the default. Set it to route through a proxy or AI gateway that speaks the same API. Model list, test and drafts all use it."
+        />
         <TestAiButton
           provider={provider}
           model={String(model ?? "")}
-          typedKey={sf.secrets[AI_KEY[provider]] ?? undefined}
-          keySaved={secrets[AI_KEY[provider]].set && sf.secrets[AI_KEY[provider]] !== null}
+          typedKey={typedKey}
+          keySaved={keySaved}
+          baseUrl={String(baseUrl)}
         />
         <p className="text-xs text-muted-foreground">
           Keys saved for other providers:{" "}
@@ -502,18 +541,25 @@ function TestAiButton({
   model,
   typedKey,
   keySaved,
+  baseUrl,
 }: {
   provider: AiProvider
   model: string
   typedKey: string | undefined
   keySaved: boolean
+  baseUrl: string
 }) {
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   const test = useMutation({
     mutationFn: () =>
       api<{ ok: true; reply: string }>("/settings/ai/test", {
         method: "POST",
-        body: { provider, model, ...(typedKey?.trim() ? { apiKey: typedKey.trim() } : {}) },
+        body: {
+          provider,
+          model,
+          baseUrl: baseUrl.trim(),
+          ...(typedKey?.trim() ? { apiKey: typedKey.trim() } : {}),
+        },
       }),
     onMutate: () => setResult(null),
     onSuccess: () => setResult({ ok: true, message: "Connected. The key and model work." }),

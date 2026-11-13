@@ -7,6 +7,8 @@ export const qk = {
   filters: ["filters"] as const,
   lists: ["lists"] as const,
   settings: ["settings"] as const,
+  aiModels: (provider: string, baseUrl: string, typedKey: string | null) =>
+    ["ai-models", provider, baseUrl, typedKey] as const,
   sync: ["sync"] as const,
   connections: ["connections"] as const,
   activity: ["activity"] as const,

@@ -59,6 +59,13 @@ export const connectionsSettingsSchema = z.object({
         .trim()
         .regex(/^v\d{1,3}\.\d$/, "Use the form v26.0")
         .default(PLATFORM_VERSIONS.metaGraphApiVersion),
+      /** Facebook Login for Business configuration ID. Empty = ask for permissions by scope. */
+      loginConfigId: z
+        .string()
+        .trim()
+        .regex(/^\d*$/, "The configuration ID is digits only")
+        .max(32)
+        .default(""),
     })
     .prefault({}),
   google: z
@@ -146,19 +153,72 @@ export const filtersSettingsSchema = z.object({
 })
 export type FiltersSettings = z.infer<typeof filtersSettingsSchema>
 
-export const AI_PROVIDERS = ["anthropic", "openai", "google"] as const
+export const AI_PROVIDERS = ["anthropic", "openai", "google", "openrouter"] as const
 export const aiProviderSchema = z.enum(AI_PROVIDERS)
 export type AiProvider = z.infer<typeof aiProviderSchema>
 export const AI_PROVIDER_LABELS: Record<AiProvider, string> = {
   anthropic: "Claude (Anthropic)",
   openai: "ChatGPT (OpenAI)",
   google: "Gemini (Google)",
+  openrouter: "OpenRouter",
 }
-/** Suggested model ids. Re-checked against each provider's docs when Phase 4 starts. */
+/** Which `ai` secret holds each provider's API key. */
+export const AI_PROVIDER_SECRET = {
+  anthropic: "anthropicApiKey",
+  openai: "openaiApiKey",
+  google: "googleApiKey",
+  openrouter: "openrouterApiKey",
+} as const satisfies Record<AiProvider, string>
+/**
+ * Default model ids: each provider's latest general model, checked 2026-11-13 against the
+ * provider docs and OpenRouter's /api/v1/models. OpenRouter ids are `vendor/model`.
+ */
 export const AI_MODEL_SUGGESTIONS: Record<AiProvider, string> = {
-  anthropic: "claude-sonnet-5-5",
-  openai: "",
-  google: "",
+  anthropic: "claude-fable-5-2",
+  openai: "gpt-6.1-terra",
+  google: "gemini-4-hydrogen",
+  openrouter: "google/gemini-4-hydrogen",
+}
+
+/**
+ * Each SDK's own default API endpoint (base URL, version path included). Model lists are at
+ * `${baseUrl}/models` for all four.
+ */
+export const AI_DEFAULT_BASE_URLS: Record<AiProvider, string> = {
+  anthropic: "https://api.anthropic.com/v1",
+  openai: "https://api.openai.com/v1",
+  google: "https://generativelanguage.googleapis.com/v1beta",
+  openrouter: "https://openrouter.ai/api/v1",
+}
+
+/** A provider endpoint override: "" = the provider's default. https only (it carries the key). */
+export const aiBaseUrlSchema = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((v) => {
+    if (v === "") return true
+    try {
+      return new URL(v).protocol === "https:"
+    } catch {
+      return false
+    }
+  }, "Enter an https:// URL, or leave it blank for the default")
+  .transform((v) => v.replace(/\/+$/, ""))
+
+/** The endpoint actually used: the override, else the provider's default. */
+export function aiBaseUrl(provider: AiProvider, override: string | null | undefined): string {
+  const v = override?.trim().replace(/\/+$/, "")
+  return v || AI_DEFAULT_BASE_URLS[provider]
+}
+
+/** One entry of Settings → AI replies → model list (fetched live from the provider). */
+export interface AiModelOption {
+  id: string
+  /** Display name when the provider gives one. */
+  name: string | null
+  /** ISO date the model was published, when the provider says. */
+  created: string | null
 }
 
 const modelId = z
@@ -175,6 +235,16 @@ export const aiSettingsSchema = z.object({
       anthropic: modelId.default(AI_MODEL_SUGGESTIONS.anthropic),
       openai: modelId.default(AI_MODEL_SUGGESTIONS.openai),
       google: modelId.default(AI_MODEL_SUGGESTIONS.google),
+      openrouter: modelId.default(AI_MODEL_SUGGESTIONS.openrouter),
+    })
+    .prefault({}),
+  /** API endpoint per provider ("" = default), e.g. a proxy or an AI gateway. */
+  baseUrls: z
+    .object({
+      anthropic: aiBaseUrlSchema.default(""),
+      openai: aiBaseUrlSchema.default(""),
+      google: aiBaseUrlSchema.default(""),
+      openrouter: aiBaseUrlSchema.default(""),
     })
     .prefault({}),
   draftsPerItem: z.number().int().min(1).max(3).default(2),
@@ -277,7 +347,7 @@ export const SECTION_SECRETS = {
   connections: ["metaAppSecret", "metaVerifyToken", "googleClientSecret", "linkedinClientSecret"],
   sync: [],
   filters: [],
-  ai: ["anthropicApiKey", "openaiApiKey", "googleApiKey"],
+  ai: ["anthropicApiKey", "openaiApiKey", "googleApiKey", "openrouterApiKey"],
   replies: [],
   slack: ["botToken", "signingSecret"],
   notifications: [],

@@ -29,6 +29,9 @@ export const REPLY_MAX_CHARS: Record<Platform, number> = {
   linkedin: 1250,
 }
 
+/** DM limits differ from comments: Messenger 2000 characters, Instagram DMs 1000. */
+export const DM_MAX_CHARS: Partial<Record<Platform, number>> = { facebook: 2000, instagram: 1000 }
+
 export interface DraftThreadEntry {
   from: "customer" | "us"
   text: string
@@ -81,7 +84,8 @@ export function buildDraftPrompt(
   opts: DraftOptions,
 ): { system: string; prompt: string } {
   const isPublic = ctx.type !== "dm"
-  const max = REPLY_MAX_CHARS[ctx.platform]
+  const max =
+    (ctx.type === "dm" ? DM_MAX_CHARS[ctx.platform] : undefined) ?? REPLY_MAX_CHARS[ctx.platform]
   const rules = [
     `You write reply drafts for "${ctx.accountName}" to ${kindLabel(ctx)}.`,
     `Write ${opts.count} distinct draft${opts.count === 1 ? "" : "s"}: vary the length and angle, not just the wording.`,
@@ -142,12 +146,17 @@ export const draftsOutputSchema = z.object({
 })
 
 /** Drop blanks, near-duplicates and drafts over the platform limit; keep at most `count`. */
-export function cleanDrafts(drafts: string[], count: number, platform?: Platform): string[] {
+export function cleanDrafts(
+  drafts: string[],
+  count: number,
+  platform?: Platform,
+  type?: ItemType,
+): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const d of drafts) {
     const t = d.trim()
-    if (platform && replyLengthError(platform, t)) continue
+    if (platform && replyLengthError(platform, t, type)) continue
     const key = t.toLowerCase().replace(/\s+/g, " ")
     if (!t || seen.has(key)) continue
     seen.add(key)
@@ -161,7 +170,11 @@ export function cleanDrafts(drafts: string[], count: number, platform?: Platform
 export const GOOGLE_REPLY_MAX_BYTES = 4096
 
 /** Why a reply is too long for the platform, or null when it fits. */
-export function replyLengthError(platform: Platform, text: string): string | null {
+export function replyLengthError(platform: Platform, text: string, type?: ItemType): string | null {
+  const dmMax = type === "dm" ? DM_MAX_CHARS[platform] : undefined
+  if (dmMax !== undefined) {
+    return text.length > dmMax ? `Keep DMs under ${dmMax} characters (now ${text.length}).` : null
+  }
   if (platform === "google_business") {
     const bytes = new TextEncoder().encode(text).length
     return bytes > GOOGLE_REPLY_MAX_BYTES
