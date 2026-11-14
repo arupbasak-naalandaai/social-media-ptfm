@@ -180,6 +180,8 @@ export interface ReplySender {
       id: string
       externalId: string
       parentExternalId: string | null
+      /** The post/video the comment is on (LinkedIn replies name it). */
+      postId: string | null
       type: string
       platform: string
       raw: unknown
@@ -218,6 +220,7 @@ export async function sendQueuedReply(
           organizationId: true,
           externalId: true,
           parentExternalId: true,
+          postId: true,
           type: true,
           platform: true,
           raw: true,

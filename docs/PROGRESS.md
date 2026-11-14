@@ -15,7 +15,7 @@
 | 6. YouTube                      | 🟡 Built    | 2026-11-13. Code + tests. Acceptance needs your Google OAuth client + a channel                    |
 | 7. Meta DMs                     | 🟡 Built    | 2026-11-13. Code + tests; DM → reply checked locally on demo accounts. Needs your Meta app         |
 | 8. Slack                        | 💤 Deferred | Not in MVP                                                                                         |
-| 9. LinkedIn comments            | ⏳          | Needs Community Management API approval + Phase D                                                  |
+| 9. LinkedIn comments            | 🟡 Built    | 2026-11-15. Code + tests. Acceptance needs your LinkedIn app with CMA access (webhooks: Phase D)   |
 | 10. Analytics                   | ⏳          |                                                                                                    |
 | D. Deploy to Railway            | 💤 Deferred | Run when requested; required before real webhooks                                                  |
 
@@ -277,6 +277,48 @@ Requested after Phase 2: a separate section for people you already interacted wi
 
 - Simulated items are in the dev DB (5 items, 2 conversations, 1 demo reply). `pnpm db:seed --reset` removes them.
 - Own-account echoes and comments are dropped by the default "own activity" rule, so a DM thread shows replies sent from here, not ones typed in the Meta inbox.
+
+## Phase 9: LinkedIn Company Page comments (2026-11-15)
+
+**Acceptance (not run yet: needs your app):** "Org post comments arrive and replies post". Everything up to LinkedIn's servers is built and tested against stubs. API facts re-checked against the `202610` docs (Community Management API).
+
+| Check            | Result                                                                                                                                                                                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Connect          | ✅ Test (LinkedIn stubbed): `/api/oauth/linkedin/start` → consent (`rw_organization_admin r_organization_social_feed w_organization_social_feed`) → token (+ refresh token when issued) → Pages from `organizationAcls` (approved ADMINISTRATOR) → `li_org` rows, sync state `webhook_reconcile` |
+| Webhooks         | ✅ Tests: validation GET answers `hex(HMAC(challengeCode, clientSecret))` as JSON; `X-LI-Signature` = `hex(HMAC("hmacsha256=" + raw body))`, constant-time; redeliveries de-duplicated by notification ids; bad signatures stored, 401, never ingested                                           |
+| Subscription     | ✅ Test: connecting subscribes each Page to `ORGANIZATION_SOCIAL_ACTION_NOTIFICATIONS` (`PUT /rest/eventSubscriptions/(…)`) when the app ID is set and the API URL is public HTTPS                                                                                                               |
+| Comments → inbox | ✅ Tests: notifications (`COMMENT`, `ADMIN_COMMENT`, `COMMENT_EDIT`) → `GET /rest/socialActions/{thread}/comments/{id}` → items; deleted comments skipped; our Page's comments marked own; member replies under ours are follow-ups                                                              |
+| Reconcile        | ✅ Test: `organizationalEntityNotifications?q=criteria` since the cursor (`timeRange=(start:…)`, 60-day cap), oldest first; webhook and reconcile produce the same ids                                                                                                                           |
+| Replies          | ✅ Test: `POST /rest/socialActions/{parent}/comments` as the Page with `parentComment` = the top-level comment; 401 → "Reconnect", 429/5xx retry                                                                                                                                                 |
+| Whole repo       | ✅ lint, typecheck, 710 tests (core 593, api 65, pipeline 44, auth 8)                                                                                                                                                                                                                            |
+
+### What was built
+
+- **`@inbox/core`:** `adapters/linkedin` (schemas, `normalizeLiComment`, URN helpers, `LINKEDIN_SCOPES`), fixtures in `fixtures/linkedin`. Settings → Connections → LinkedIn gains an optional **App ID** (for webhook subscriptions).
+- **`@inbox/pipeline`:** `linkedin.ts`: OAuth, token storage and refresh (`linkedinContext`), Page lookup, notifications → comments, replies, webhook subscribe, challenge + signature helpers. Reply senders now also get the item's `postId`.
+- **Worker:** `linkedin/`: `li_comments` reconcile adapter, `linkedin` reply sender, `linkedin` webhook handler.
+- **API:** `GET/POST /webhooks/linkedin`; `/api/oauth/linkedin/{start,callback}`; Test and "Open in LinkedIn" for Pages; LinkedIn webhook health and setup URLs in `GET /api/connections`.
+- **Web:** the LinkedIn card on Connections is live (Connect, setup checklist: credentials, redirect URL, CMA access, webhook URL + status).
+
+### Decisions and deviations
+
+- **Redirect URI on the web domain** (`WEB_URL/api/oauth/linkedin/callback`), like Meta. Settings previously showed an API-domain URL; it now shows this one.
+- **Comments are found through notifications, not by listing posts.** One notifications call per poll plus one GET per new comment, instead of one call per recent post. It also catches comments on old posts. This matters on the Development tier (500 calls/app/day).
+- **Commenter names are best effort.** LinkedIn returns other members' profiles only to some apps. We try `GET /rest/people/(id:…)` once and back off for an hour after a 403; without it, items show the member URN only. **[verify at approval]**
+- **Tokens:** 60-day access tokens. With programmatic refresh tokens they're renewed when under 14 days are left; without, the Page must be reconnected (the expiry warning fires first).
+- **Replies to replies** go under the top-level comment (LinkedIn nests one level).
+
+### Needed from you (to run the acceptance)
+
+1. **A new LinkedIn app** with only the **Community Management API** product (registered legal entity, verified business email, a Page super admin verifies the app). Client ID + secret (and optionally the app ID, the digits in the app's URL) in Settings → Connections.
+2. Add the **redirect URL** shown on the Connections page under the app's Auth tab, then click **Connect** on the LinkedIn card as a Page super admin.
+3. For real-time comments: the **webhook URL** in the app's Webhooks tab. It needs a public HTTPS API URL (Phase D; LinkedIn rejects ngrok). Until then, comments arrive on the reconcile schedule (30 min by default; "Sync now").
+
+### To verify against the live API
+
+- The `timeRange=(start:…)` encoding on `organizationalEntityNotifications`, and whether results come newest or oldest first (we sort locally either way).
+- That `ADMIN_COMMENT` notifications cover replies posted from this app.
+- Member profile lookups (above).
 
 ## Open questions
 

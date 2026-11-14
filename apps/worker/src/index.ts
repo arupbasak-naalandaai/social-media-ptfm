@@ -8,6 +8,7 @@ import { startHealthServer, type HealthState } from "./health"
 import { registerGoogle } from "./google"
 import { registerMeta } from "./meta"
 import { registerYoutube } from "./youtube"
+import { registerLinkedin } from "./linkedin"
 import { registerAiDraftWorker } from "./jobs/ai-draft"
 import { registerFilterWorker } from "./jobs/filter"
 import { registerIngestWorker } from "./jobs/ingest"
@@ -40,6 +41,7 @@ state.bossStarted = true
 registerGoogle()
 registerMeta()
 registerYoutube()
+registerLinkedin()
 await registerFilterWorker(boss, prisma, logger)
 await registerPollWorker(boss, prisma, keyring, logger)
 await registerAiDraftWorker(boss, prisma, keyring, logger)

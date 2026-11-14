@@ -96,6 +96,8 @@ export const connectionsSettingsSchema = z.object({
   linkedin: z
     .object({
       clientId: optionalText(100),
+      /** Developer application ID (digits in the app's URL). Needed to subscribe webhooks. */
+      appId: z.string().trim().regex(/^\d*$/, "The app ID is digits only").max(20).default(""),
       apiVersion: z
         .string()
         .trim()

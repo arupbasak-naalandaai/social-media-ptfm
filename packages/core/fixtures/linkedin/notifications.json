@@ -1,0 +1,31 @@
+{
+  "type": "ORGANIZATION_SOCIAL_ACTION_NOTIFICATIONS",
+  "notifications": [
+    {
+      "generatedActivity": "urn:li:comment:(urn:li:activity:7100000000000000001,7100000000000000101)",
+      "decoratedGeneratedActivity": {
+        "comment": {
+          "entity": "urn:li:comment:(urn:li:activity:7100000000000000001,7100000000000000101)",
+          "owner": "urn:li:person:meeraK1",
+          "object": "urn:li:activity:7100000000000000001",
+          "text": "Are you hiring interns this summer?"
+        }
+      },
+      "lastModifiedAt": 1763197200000,
+      "notificationId": 4406004,
+      "sourcePost": "urn:li:activity:7100000000000000001",
+      "action": "COMMENT",
+      "organizationalEntity": "urn:li:organization:2414183",
+      "subscriber": "urn:li:person:admin1"
+    },
+    {
+      "generatedActivity": "urn:li:share:6343443434841538048",
+      "lastModifiedAt": 1763197260000,
+      "notificationId": 4406005,
+      "sourcePost": "urn:li:activity:7100000000000000001",
+      "action": "SHARE",
+      "organizationalEntity": "urn:li:organization:2414183",
+      "subscriber": "urn:li:person:admin1"
+    }
+  ]
+}

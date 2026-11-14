@@ -13,6 +13,7 @@
  * `/google/callback` when its `state` is one of ours ({@link isGoogleConnectState}); everything
  * else goes to better-auth.
  * - Facebook Pages + linked Instagram accounts: `/meta/start` → `/meta/callback`
+ * - LinkedIn Company Pages: `/linkedin/start` → `/linkedin/callback`
  */
 import { randomBytes } from "node:crypto"
 import { Hono, type Context } from "hono"
@@ -22,25 +23,35 @@ import type { Logger } from "@inbox/core/logger"
 import type { Prisma, PrismaClient } from "@inbox/db"
 import {
   declinedMetaPermissions,
+  encryptLinkedinTokens,
   encryptMetaToken,
   encryptTokens,
   ensureSyncStates,
   exchangeGoogleCode,
+  exchangeLinkedinCode,
   exchangeMetaCode,
   GoogleApiError,
+  getLinkedinOrganization,
   googleAuthUrl,
+  LinkedinApiError,
+  linkedinAuthUrl,
+  linkedinPageUrl,
+  listAdministeredOrgs,
   listGbpAccounts,
   listGbpLocations,
   listManagedPages,
   listMyYoutubeChannels,
   loadGoogleClient,
+  loadLinkedinApp,
   loadMetaApp,
   loadSettingsSection,
   MetaApiError,
   metaAuthUrl,
+  missingLinkedinScopes,
   notifyInbox,
   pkcePair,
   setGbpNotifications,
+  subscribeLinkedinWebhook,
   subscribePage,
   YoutubeApiError,
 } from "@inbox/pipeline"
@@ -59,6 +70,8 @@ const STATE_TTL_MS = 10 * 60 * 1000
 /** better-auth's Google callback, shared with the connect flow (one redirect URI). */
 export const GOOGLE_CALLBACK_PATH = "/api/auth/callback/google"
 export const googleRedirectUri = (webUrl: string) => `${webUrl}${GOOGLE_CALLBACK_PATH}`
+/** LinkedIn's redirect URI (web domain, proxied to the api, like Meta's). */
+export const linkedinRedirectUri = (webUrl: string) => `${webUrl}/api/oauth/linkedin/callback`
 
 /** True when `state` was issued by `/google/start` or `/youtube/start` (not by better-auth). */
 export async function isGoogleConnectState(prisma: PrismaClient, state: string | undefined) {
@@ -71,7 +84,8 @@ export async function isGoogleConnectState(prisma: PrismaClient, state: string |
 }
 const stateAad = (state: string) => aadFor("-", "oauth_state", state)
 
-type Product = "google_business" | "youtube" | "meta"
+type Product = "google_business" | "youtube" | "meta" | "linkedin"
+type StateProvider = "google" | "meta" | "linkedin"
 
 interface PendingState {
   organizationId: string
@@ -88,11 +102,12 @@ export function oauthRoutes({ prisma, keyring, urls, logger }: OAuthRouteDeps) {
   const redirect = {
     google: googleRedirectUri(urls.webUrl),
     meta: `${urls.webUrl}/api/oauth/meta/callback`,
+    linkedin: linkedinRedirectUri(urls.webUrl),
   }
   const back = (params: Record<string, string>) =>
     `${urls.webUrl}/connections?${new URLSearchParams(params)}`
 
-  async function createState(provider: "google" | "meta", pending: PendingState) {
+  async function createState(provider: StateProvider, pending: PendingState) {
     const state = randomBytes(24).toString("base64url")
     await prisma.verification.create({
       data: {
@@ -106,7 +121,7 @@ export function oauthRoutes({ prisma, keyring, urls, logger }: OAuthRouteDeps) {
   }
 
   /** The pending state for this callback, consumed (single use), or null when invalid. */
-  async function consumeState(c: AppContext, provider: "google" | "meta") {
+  async function consumeState(c: AppContext, provider: StateProvider) {
     const state = c.req.query("state") ?? ""
     const row = state
       ? await prisma.verification.findFirst({ where: { identifier: `oauth:${provider}:${state}` } })
@@ -415,6 +430,146 @@ export function oauthRoutes({ prisma, keyring, urls, logger }: OAuthRouteDeps) {
         logger.warn({ err: (err as Error).message }, "meta connect failed")
         const message =
           err instanceof MetaApiError ? err.message : "Connecting Facebook failed. Try again."
+        return c.redirect(back({ error: message }))
+      }
+    })
+
+    .get("/linkedin/start", async (c) => {
+      const org = c.get("org")!
+      const app = await loadLinkedinApp(prisma, keyring, org.id)
+      if (!app) {
+        return c.redirect(
+          back({
+            error: "Add the LinkedIn client ID and client secret in Settings → Connections first.",
+          }),
+        )
+      }
+      const state = await createState("linkedin", {
+        organizationId: org.id,
+        userId: c.get("user")!.id,
+        product: "linkedin",
+      })
+      return c.redirect(linkedinAuthUrl(app, { redirectUri: redirect.linkedin, state }))
+    })
+
+    .get("/linkedin/callback", async (c) => {
+      const org = c.get("org")!
+      const q = c.req.query()
+      if (q.error) {
+        return c.redirect(
+          back({
+            error:
+              q.error === "user_cancelled_login" || q.error === "user_cancelled_authorize"
+                ? "LinkedIn access wasn't granted."
+                : `LinkedIn said: ${q.error_description ?? q.error}`,
+          }),
+        )
+      }
+      const pending = await consumeState(c, "linkedin")
+      if (!pending || !q.code) {
+        return c.redirect(
+          back({ error: "That sign-in link expired or was already used. Try Connect again." }),
+        )
+      }
+      try {
+        const app = await loadLinkedinApp(prisma, keyring, org.id)
+        if (!app) throw new Error("The LinkedIn app was removed from Settings")
+        const token = await exchangeLinkedinCode(app, {
+          code: q.code,
+          redirectUri: redirect.linkedin,
+        })
+        const warnings: string[] = []
+        const missing = missingLinkedinScopes(token)
+        if (missing.length) {
+          warnings.push(
+            `Not granted: ${missing.join(", ")}. Comments or replies won't work until the app has Community Management API access and you reconnect.`,
+          )
+        }
+        if (!token.refresh_token) {
+          warnings.push(
+            "LinkedIn didn't issue a refresh token, so you'll need to reconnect before the token expires in about 60 days.",
+          )
+        }
+        const ctx = { token: token.access_token, version: app.version }
+        const { orgIds, personUrn } = await listAdministeredOrgs(ctx)
+        const webhookUrl = `${urls.apiPublicUrl}/webhooks/linkedin`
+        const canSubscribe =
+          Boolean(app.appId && personUrn) &&
+          /^https:\/\//.test(urls.apiPublicUrl) &&
+          !/localhost|127\.0\.0\.1/.test(urls.apiPublicUrl)
+
+        for (const id of orgIds) {
+          const o = await getLinkedinOrganization(ctx, id).catch(() => null)
+          const key = { platform: "linkedin", externalId: id }
+          const meta = {
+            ...(o?.vanityName ? { vanityName: o.vanityName } : {}),
+            link: linkedinPageUrl({ id, vanityName: o?.vanityName }),
+            ...(personUrn ? { connectedBy: personUrn } : {}),
+          } satisfies Prisma.InputJsonObject
+          const tokens = encryptLinkedinTokens(keyring, org.id, key, token)
+          const displayName = o?.localizedName ?? `LinkedIn Page ${id}`
+          await prisma.platformAccount.upsert({
+            where: {
+              organizationId_platform_externalId: {
+                organizationId: org.id,
+                platform: "linkedin",
+                externalId: id,
+              },
+            },
+            create: {
+              organizationId: org.id,
+              platform: "linkedin",
+              kind: "li_org",
+              externalId: id,
+              displayName,
+              meta,
+              status: "connected",
+              ...tokens,
+            },
+            update: {
+              displayName,
+              meta,
+              status: "connected",
+              lastError: null,
+              lastErrorAt: null,
+              ...tokens,
+            },
+          })
+          if (canSubscribe) {
+            try {
+              await subscribeLinkedinWebhook(ctx, {
+                appId: app.appId,
+                personUrn: personUrn!,
+                orgUrn: `urn:li:organization:${id}`,
+                webhookUrl,
+              })
+            } catch (err) {
+              warnings.push(`Webhook for ${displayName}: ${(err as Error).message}`)
+            }
+          }
+        }
+        if (orgIds.length === 0) {
+          warnings.push(
+            "This LinkedIn member isn't a super admin of any Company Page. Sign in as a Page admin.",
+          )
+        } else if (!canSubscribe) {
+          warnings.push(
+            app.appId
+              ? "No public HTTPS API URL, so comments arrive on the reconcile schedule."
+              : "No LinkedIn app ID in Settings → Connections, so webhooks aren't subscribed: comments arrive on the reconcile schedule.",
+          )
+        }
+        return await finish(c, {
+          platform: "linkedin",
+          connected: "linkedin",
+          count: orgIds.length,
+          detail: { pages: orgIds.length, webhooks: canSubscribe },
+          warnings,
+        })
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, "linkedin connect failed")
+        const message =
+          err instanceof LinkedinApiError ? err.message : "Connecting LinkedIn failed. Try again."
         return c.redirect(back({ error: message }))
       }
     })

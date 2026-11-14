@@ -109,11 +109,12 @@ const PROVIDERS: Provider[] = [
     key: "linkedin",
     title: "LinkedIn Company Page",
     platforms: ["linkedin"],
-    description: "Comments on your organization’s posts (needs LinkedIn API approval).",
-    phase: 9,
-    revokeHint: "LinkedIn",
+    description:
+      "Comments on your Company Page’s posts, through your LinkedIn app (needs Community Management API access).",
+    startUrl: "/api/oauth/linkedin/start",
+    revokeHint: "LinkedIn (Settings → Data privacy → Permitted services)",
     noun: ["page", "pages"],
-    emptyHint: "",
+    emptyHint: "Sign in as a super admin of the Company Page.",
   },
 ]
 
@@ -253,7 +254,7 @@ function ConnectionsContent() {
       <Overview data={data} />
       {PROVIDERS.map((p) => {
         const accounts = data.accounts.filter((a) => p.platforms.includes(a.platform))
-        const configured = p.key === "linkedin" ? false : data.configured[p.key]
+        const configured = data.configured[p.key]
         const hasReal = accounts.some((a) => !a.demo)
         return (
           <Card key={p.key}>
@@ -292,13 +293,7 @@ function ConnectionsContent() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              {p.key === "linkedin" ? null : (
-                <SetupChecklist
-                  provider={p.key}
-                  data={data}
-                  defaultOpen={!configured || !hasReal}
-                />
-              )}
+              <SetupChecklist provider={p.key} data={data} defaultOpen={!configured || !hasReal} />
               {accounts.length ? (
                 <ul className="divide-y rounded-lg border">
                   {accounts.map((a) => (
@@ -473,7 +468,7 @@ function SetupChecklist({
   data,
   defaultOpen,
 }: {
-  provider: Exclude<ProviderKey, "linkedin">
+  provider: ProviderKey
   data: ConnectionsResponse
   defaultOpen: boolean
 }) {
@@ -562,6 +557,60 @@ function SetupChecklist({
           Without it, only people with a role on the Meta app can be connected, and Instagram
           comment webhooks don’t fire. Request the permissions the Connect dialog asks for.
         </p>
+      </CheckItem>,
+    )
+  } else if (provider === "linkedin") {
+    const wh = webhookLine(webhooks.linkedin, "webhook")
+    add(
+      configured.linkedin ? "ok" : "todo",
+      <CheckItem
+        key="app"
+        state={configured.linkedin ? "ok" : "todo"}
+        title="LinkedIn app client ID and client secret"
+      >
+        <p className="text-xs text-muted-foreground">
+          From linkedin.com/developers → your app → Auth. Use a new app with only the Community
+          Management API product. Save them in {settingsLink}.
+        </p>
+      </CheckItem>,
+    )
+    add(
+      "ok",
+      <CheckItem key="redirect" state="ok" title="Authorized redirect URL">
+        <CopyField
+          label="Add to the app’s Auth tab → Authorized redirect URLs"
+          value={setup.redirectUris.linkedin}
+        />
+      </CheckItem>,
+    )
+    add(
+      "optional",
+      <CheckItem key="access" state="optional" title="Community Management API access approved">
+        <p className="text-xs text-muted-foreground">
+          Needs a registered legal entity and a Page super admin to verify the app. The Development
+          tier allows 500 calls a day; Standard needs a screencast.
+        </p>
+      </CheckItem>,
+    )
+    add(
+      "optional",
+      <CheckItem
+        key="webhook"
+        state={setup.linkedinAppIdSet && wh.state === "ok" ? "ok" : "optional"}
+        title="Real-time comments via webhook"
+      >
+        <CopyField
+          label="Webhook URL (app → Webhooks tab)"
+          value={setup.webhookUrls.linkedin}
+          description={
+            !setup.publicUrlReachable
+              ? "Needs a public HTTPS API URL (LinkedIn doesn’t accept ngrok). Until then, comments arrive on the reconcile schedule."
+              : setup.linkedinAppIdSet
+                ? "Connecting a Page subscribes it automatically."
+                : "Also save the app ID (the digits in the app’s URL) in Settings → Connections, then reconnect, to subscribe Pages."
+          }
+        />
+        <p className="text-xs text-muted-foreground">{wh.text}</p>
       </CheckItem>,
     )
   } else {
@@ -774,7 +823,12 @@ function AccountRow({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {a.avatarUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- remote avatars, any host
-          <img src={a.avatarUrl} alt="" className="size-6 shrink-0 rounded-full object-cover" />
+          <img
+            src={a.avatarUrl}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="size-6 shrink-0 rounded-full object-cover"
+          />
         ) : (
           <PlatformIcon platform={a.platform} className="size-5 shrink-0" />
         )}

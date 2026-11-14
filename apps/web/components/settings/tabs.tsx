@@ -371,7 +371,7 @@ export function ConnectionsTab({ data }: { data: SettingsResponse }) {
 
       <SettingsCard
         title="LinkedIn"
-        description="Needs Community Management API access for your LinkedIn app (Phase 9)."
+        description="A LinkedIn app with Community Management API access. The Connect button on the Connections page uses it."
       >
         <Grid>
           <TextField control={control} name="linkedin.clientId" label="Client ID" />
@@ -390,8 +390,14 @@ export function ConnectionsTab({ data }: { data: SettingsResponse }) {
             label="API version"
             description={`YYYYMM. Default ${PLATFORM_VERSIONS.linkedinApiVersion}.`}
           />
-          <CopyField label="Webhook URL" value={meta.webhookUrls.linkedin} />
+          <TextField
+            control={control}
+            name="linkedin.appId"
+            label="App ID (optional)"
+            description="The digits in the app’s developer-portal URL. Needed to subscribe webhooks."
+          />
         </Grid>
+        <CopyField label="Webhook URL" value={meta.webhookUrls.linkedin} />
         <CopyField label="OAuth redirect URI" value={meta.oauthRedirectUrls.linkedin} />
       </SettingsCard>
     </SectionFormShell>

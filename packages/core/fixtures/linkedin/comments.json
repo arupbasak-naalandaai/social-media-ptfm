@@ -1,0 +1,35 @@
+{
+  "top": {
+    "actor": "urn:li:person:meeraK1",
+    "commentUrn": "urn:li:comment:(urn:li:activity:7100000000000000001,7100000000000000101)",
+    "created": { "actor": "urn:li:person:meeraK1", "time": 1763197200000 },
+    "id": "7100000000000000101",
+    "lastModified": { "actor": "urn:li:person:meeraK1", "time": 1763197200000 },
+    "message": { "attributes": [], "text": "Are you hiring interns this summer?" },
+    "object": "urn:li:activity:7100000000000000001"
+  },
+  "ours": {
+    "actor": "urn:li:organization:2414183",
+    "agent": "urn:li:person:admin1",
+    "commentUrn": "urn:li:comment:(urn:li:activity:7100000000000000001,7100000000000000102)",
+    "created": {
+      "actor": "urn:li:organization:2414183",
+      "impersonator": "urn:li:person:admin1",
+      "time": 1763200800000
+    },
+    "id": "7100000000000000102",
+    "lastModified": { "actor": "urn:li:organization:2414183", "time": 1763200800000 },
+    "message": { "attributes": [], "text": "Yes! Applications open in March." },
+    "object": "urn:li:activity:7100000000000000001",
+    "parentComment": "urn:li:comment:(urn:li:activity:7100000000000000001,7100000000000000101)"
+  },
+  "followUp": {
+    "actor": "urn:li:person:meeraK1",
+    "id": "7100000000000000103",
+    "created": { "time": 1763204400000 },
+    "lastModified": { "time": 1763208000000 },
+    "message": { "text": "Thanks, where do I apply?" },
+    "object": "urn:li:activity:7100000000000000001",
+    "parentComment": "urn:li:comment:(urn:li:activity:7100000000000000001,7100000000000000102)"
+  }
+}

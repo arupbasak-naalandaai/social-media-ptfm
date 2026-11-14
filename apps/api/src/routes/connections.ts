@@ -24,18 +24,21 @@ import {
   googleAccessToken,
   hasSignInGoogleClient,
   isDemoAccount,
+  linkedinContext,
   listGbpReviews,
   listMyYoutubeChannels,
   loadSettingsSection,
+  markLinkedinReauth,
   markMetaReauth,
   metaContext,
   notifyInbox,
+  testLinkedinAccount,
   testMetaAccount,
   v4LocationPath,
 } from "@inbox/pipeline"
 import { validate } from "../lib/validate"
 import { requireAuth, requireRole } from "../middleware/session"
-import { googleRedirectUri } from "./oauth"
+import { googleRedirectUri, linkedinRedirectUri } from "./oauth"
 import type { AppEnv } from "../types"
 
 const accountKindSchema = z.enum(ACCOUNT_KINDS)
@@ -61,6 +64,11 @@ function accountUrl(a: Pick<PlatformAccount, "platform" | "externalId" | "meta">
     }
     case "youtube":
       return `https://www.youtube.com/channel/${encodeURIComponent(a.externalId)}`
+    case "linkedin":
+      return (
+        str(a.meta, "link") ??
+        `https://www.linkedin.com/company/${encodeURIComponent(a.externalId)}/`
+      )
     default:
       return null
   }
@@ -111,6 +119,15 @@ async function testAccount(
         return await testMetaAccount(ctx)
       } catch (err) {
         await markMetaReauth(prisma, account, err)
+        throw err
+      }
+    }
+    case "linkedin": {
+      try {
+        const ctx = await linkedinContext(prisma, keyring, account)
+        return await testLinkedinAccount(ctx, account.externalId)
+      } catch (err) {
+        await markLinkedinReauth(prisma, account, err)
         throw err
       }
     }
@@ -182,7 +199,7 @@ export function connectionRoutes({
 
       .get("/", async (c) => {
         const org = c.get("org")!
-        const [rows, settings, meta, google] = await Promise.all([
+        const [rows, settings, meta, google, linkedin] = await Promise.all([
           prisma.platformAccount.findMany({
             where: { organizationId: org.id },
             orderBy: [{ platform: "asc" }, { displayName: "asc" }],
@@ -194,6 +211,7 @@ export function connectionRoutes({
           }),
           webhookHealth(org.id, "meta"),
           webhookHealth(org.id, "google"),
+          webhookHealth(org.id, "linkedin"),
         ])
         const values = parseSectionValues("connections", settings?.connections)
         const secrets = parseSectionSecrets("connections", settings?.connections)
@@ -248,14 +266,19 @@ export function connectionRoutes({
             meta: Boolean(values.meta.appId && secrets.metaAppSecret),
             linkedin: Boolean(values.linkedin.clientId && secrets.linkedinClientSecret),
           },
-          webhooks: { meta, google },
+          webhooks: { meta, google, linkedin },
           setup: {
             apiPublicUrl: api,
             publicUrlReachable: /^https:\/\//.test(api) && !/localhost|127\.0\.0\.1/.test(api),
-            webhookUrls: { meta: `${api}/webhooks/meta`, google: `${api}/webhooks/google` },
+            webhookUrls: {
+              meta: `${api}/webhooks/meta`,
+              google: `${api}/webhooks/google`,
+              linkedin: `${api}/webhooks/linkedin`,
+            },
             redirectUris: {
               google: googleRedirectUri(urls.webUrl),
               meta: `${urls.webUrl}/api/oauth/meta/callback`,
+              linkedin: linkedinRedirectUri(urls.webUrl),
             },
             googleClient,
             metaVerifyToken: {
@@ -267,6 +290,7 @@ export function connectionRoutes({
                   : null,
             },
             googlePubsubTopicSet: Boolean(values.google.pubsubTopic),
+            linkedinAppIdSet: Boolean(values.linkedin.appId),
           },
         }
         return c.json(body)

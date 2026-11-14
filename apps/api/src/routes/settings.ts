@@ -39,7 +39,7 @@ import {
   testAiConnection,
 } from "@inbox/pipeline"
 import { requireAuth, requireRole } from "../middleware/session"
-import { googleRedirectUri } from "./oauth"
+import { googleRedirectUri, linkedinRedirectUri } from "./oauth"
 import type { AppEnv } from "../types"
 
 export interface SettingsRouteDeps {
@@ -132,7 +132,7 @@ export function settingsRoutes({ prisma, keyring, urls }: SettingsRouteDeps) {
             oauthRedirectUrls: {
               google: googleRedirectUri(urls.webUrl),
               meta: `${urls.webUrl}/api/oauth/meta/callback`,
-              linkedin: `${api}/oauth/linkedin/callback`,
+              linkedin: linkedinRedirectUri(urls.webUrl),
             },
             youtubeChannels: await youtubeChannels(org.id),
             signInGoogleClient: hasSignInGoogleClient(),

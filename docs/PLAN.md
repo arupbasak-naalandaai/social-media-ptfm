@@ -508,6 +508,7 @@ _Re-verified 2026-11-13 against developers.google.com/my-business, docs.cloud.go
   - Each POST carries `X-LI-Signature = hex(HMAC_SHA256("hmacsha256=" + rawBody, clientSecret))`.
   - **ngrok is not supported**, so LinkedIn webhooks are tested on a Railway environment.
 - **Approval.** Registered legal entity only, plus a verified business email, a Page super admin verifying the app, and a **new app with no other products**. The Development tier is capped at 500 requests/app/day, and Standard needs a screencast.
+- **As built (Phase 9):** scopes `rw_organization_admin r_organization_social_feed w_organization_social_feed`; Pages from `organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED`. Comments are found via notifications (webhook push, or `organizationalEntityNotifications` pull for reconcile), then read with `GET /rest/socialActions/{thread}/comments/{id}`. Replies: `POST /rest/socialActions/{parentComment}/comments` with `actor` = org, `object` = thread, `parentComment` = top-level comment. Redirect URI `WEB_URL/api/oauth/linkedin/callback`.
 
 ### Slack (Phase 8)
 

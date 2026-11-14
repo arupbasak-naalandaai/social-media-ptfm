@@ -517,7 +517,7 @@ export interface ConnectionDto {
   streams: ConnectionStreamDto[]
 }
 
-export type WebhookSource = "meta" | "google"
+export type WebhookSource = "meta" | "google" | "linkedin"
 
 /** Last deliveries per webhook source, so setup problems are visible on the Connections page. */
 export interface WebhookHealthDto {
@@ -541,7 +541,7 @@ export interface ConnectionsResponse {
     /** Webhooks can't reach a localhost / http URL. */
     publicUrlReachable: boolean
     webhookUrls: Record<WebhookSource, string>
-    redirectUris: { google: string; meta: string }
+    redirectUris: { google: string; meta: string; linkedin: string }
     /** Which Google OAuth client the Connect buttons use: Settings, the sign-in client, or none. */
     googleClient: "settings" | "sign-in" | null
     metaVerifyToken: {
@@ -551,6 +551,8 @@ export interface ConnectionsResponse {
       generated: string | null
     }
     googlePubsubTopicSet: boolean
+    /** Settings → Connections → LinkedIn app ID is set (webhook subscriptions need it). */
+    linkedinAppIdSet: boolean
   }
 }
 

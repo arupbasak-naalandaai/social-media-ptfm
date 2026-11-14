@@ -5,14 +5,16 @@
 import { createHash } from "node:crypto"
 import { Hono } from "hono"
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from "jose"
-import { pubsubPushSchema } from "@inbox/core"
+import { linkedinWebhookSchema, pubsubPushSchema } from "@inbox/core"
 import type { Keyring } from "@inbox/core/crypto"
 import type { Logger } from "@inbox/core/logger"
 import type { Prisma, PrismaClient } from "@inbox/db"
 import {
   generatedMetaVerifyTokens,
+  linkedinChallengeResponse,
   loadSettingsSecret,
   loadSettingsSection,
+  verifyLinkedinSignature,
   verifyMetaSignature,
 } from "@inbox/pipeline"
 import type { JobSender } from "../lib/jobs"
@@ -69,8 +71,10 @@ export function webhookRoutes(deps: WebhookDeps) {
     return null
   }
 
-  /** Organizations with a Meta secret set in Settings → Connections (few: usually one). */
-  async function metaSecrets(key: "metaAppSecret" | "metaVerifyToken") {
+  /** Organizations with this secret set in Settings → Connections (few: usually one). */
+  async function connectionSecrets(
+    key: "metaAppSecret" | "metaVerifyToken" | "linkedinClientSecret",
+  ) {
     if (!deps.keyring) return []
     const orgs = await deps.prisma.settings.findMany({ select: { organizationId: true } })
     const out: { organizationId: string; secret: string }[] = []
@@ -98,7 +102,7 @@ export function webhookRoutes(deps: WebhookDeps) {
           return c.json({ error: "Not a subscription check" }, 400)
         // A token typed in Settings, else the one the app generated for that workspace.
         let match: { organizationId: string } | undefined = (
-          await metaSecrets("metaVerifyToken")
+          await connectionSecrets("metaVerifyToken")
         ).find((s) => s.secret === token)
         if (!match && deps.keyring) {
           const keyring = deps.keyring
@@ -128,7 +132,7 @@ export function webhookRoutes(deps: WebhookDeps) {
         }
         const header = c.req.header("x-hub-signature-256")
         const match = header
-          ? (await metaSecrets("metaAppSecret")).find((s) =>
+          ? (await connectionSecrets("metaAppSecret")).find((s) =>
               verifyMetaSignature(buf, header, s.secret),
             )
           : undefined
@@ -161,6 +165,80 @@ export function webhookRoutes(deps: WebhookDeps) {
           requestId: c.get("requestId"),
         })
         return c.text("EVENT_RECEIVED", 200)
+      })
+
+      // LinkedIn's validation (on registration, then every 2 h): answer within 3 s.
+      .get("/linkedin", async (c) => {
+        const challengeCode = c.req.query("challengeCode") ?? ""
+        if (!challengeCode) return c.json({ error: "Not a validation check" }, 400)
+        // One LinkedIn app per deployment is the norm; with several, the first configured
+        // workspace's secret answers (LinkedIn names no app unless it's a parent/child setup).
+        const [first] = await connectionSecrets("linkedinClientSecret")
+        if (!first) {
+          deps.logger.warn("linkedin webhook validation: no LinkedIn client secret in Settings")
+          return c.json({ error: "LinkedIn isn't configured" }, 503)
+        }
+        return c.json({
+          challengeCode,
+          challengeResponse: linkedinChallengeResponse(challengeCode, first.secret),
+        })
+      })
+
+      // Deliveries: verify X-LI-Signature against the raw body, store, queue, ack fast.
+      .post("/linkedin", async (c) => {
+        const buf = Buffer.from(await c.req.arrayBuffer())
+        if (buf.length > MAX_BODY_BYTES) return c.json({ error: "Too large" }, 413)
+        let json: unknown
+        try {
+          json = JSON.parse(buf.toString("utf8"))
+        } catch {
+          return c.json({ error: "Invalid JSON" }, 400)
+        }
+        const header = c.req.header("x-li-signature")
+        const match = header
+          ? (await connectionSecrets("linkedinClientSecret")).find((s) =>
+              verifyLinkedinSignature(buf, header, s.secret),
+            )
+          : undefined
+        // Retries resend the same batch; notification ids identify it.
+        const parsed = linkedinWebhookSchema.safeParse(json)
+        const ids = parsed.success
+          ? parsed.data.notifications
+              .map((n) => `${n.notificationId}:${n.subscriber ?? ""}`)
+              .sort()
+              .join(",")
+          : ""
+        let event
+        try {
+          event = await deps.prisma.webhookEvent.create({
+            data: {
+              organizationId: match?.organizationId ?? null,
+              source: "linkedin",
+              dedupeKey: match
+                ? createHash("sha256")
+                    .update(ids || buf)
+                    .digest("hex")
+                : null,
+              headers: safeHeaders(c.req.raw.headers),
+              payload: json as Prisma.InputJsonValue,
+              signatureValid: Boolean(match),
+            },
+          })
+        } catch (err) {
+          if ((err as { code?: string }).code === "P2002") return c.body(null, 200)
+          throw err
+        }
+        if (!match) {
+          deps.logger.warn({ webhookEventId: event.id }, "linkedin webhook failed signature check")
+          return c.json({ error: "Bad signature" }, 401)
+        }
+        await deps.jobs.enqueueIngest({
+          kind: "webhook",
+          organizationId: match.organizationId,
+          webhookEventId: event.id,
+          requestId: c.get("requestId"),
+        })
+        return c.body(null, 200)
       })
 
       .post("/google", async (c) => {

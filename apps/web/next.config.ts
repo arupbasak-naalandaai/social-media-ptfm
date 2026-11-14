@@ -22,6 +22,13 @@ const nextConfig: NextConfig = {
   experimental: {
     agentFeedback: true,
   },
+  images: {
+    // YouTube channel avatars (served from both hosts).
+    remotePatterns: [
+      { protocol: "https", hostname: "yt3.ggpht.com" },
+      { protocol: "https", hostname: "yt3.googleusercontent.com" },
+    ],
+  },
   cacheComponents: true,
   partialPrefetching: true,
   transpilePackages: ["@inbox/core"],
