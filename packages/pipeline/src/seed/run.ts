@@ -1,7 +1,9 @@
 /**
  * pnpm db:seed [--reset]
  *
- * Creates (or reuses) a demo organization with demo platform accounts, the default filter rules,
+ * Creates (or reuses) the demo workspace: its own organization (Organization.metadata marks it,
+ * see core/demo.ts), never a real one. Real Google sign-ins don't claim or join it; only the
+ * signed-out local preview (DEV_AUTH_BYPASS) shows it. It gets demo platform accounts, the default filter rules,
  * default keyword/domain lists, sample block/allow entries, and ~100 items ingested through the
  * real pipeline (so the Filtered tab shows actual rule decisions).
  *
@@ -10,8 +12,11 @@
  * first (never users, rules or settings).
  */
 import path from "node:path"
+import { randomUUID } from "node:crypto"
 import {
   DEFAULT_LOW_VALUE_PHRASES,
+  DEMO_ORG_METADATA,
+  DEMO_SAMPLE_LIST_ENTRIES,
   DEFAULT_RULES,
   DEFAULT_SPAM_KEYWORDS,
   DEFAULT_TRUSTED_DOMAINS,
@@ -51,19 +56,23 @@ const SAMPLE_LISTS: Omit<ListEntry, "platform">[] = [
     kind: "keyword" as const,
     value,
   })),
-  { list: "blocklist", kind: "author_handle", value: "known.troll" },
-  { list: "blocklist", kind: "domain", value: "insta-boost.xyz" },
-  { list: "allowlist", kind: "author_handle", value: "chef.marco" },
+  ...DEMO_SAMPLE_LIST_ENTRIES,
 ]
 
 async function main() {
-  // 1. Organization: reuse the oldest one (the real workspace if someone already signed in).
-  let org = await prisma.organization.findFirst({ orderBy: { createdAt: "asc" } })
+  // 1. The demo workspace: its own organization, never a real one.
+  let org = await prisma.organization.findFirst({ where: { metadata: DEMO_ORG_METADATA } })
   if (!org) {
     org = await prisma.organization.create({
-      data: { id: "demo-org", name: "Demo workspace", slug: "demo", createdAt: new Date() },
+      data: {
+        id: `demo-${randomUUID()}`,
+        name: "Demo workspace",
+        slug: "demo",
+        metadata: DEMO_ORG_METADATA,
+        createdAt: new Date(),
+      },
     })
-    logger.info("created demo organization (the first Google sign-in will claim it as owner)")
+    logger.info("created the demo workspace (shown only in the signed-out preview)")
   }
   const organizationId = org.id
   await prisma.settings.upsert({

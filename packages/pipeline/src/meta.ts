@@ -132,6 +132,15 @@ export function appSecretProof(token: string, app: Pick<MetaApp, "appSecret">): 
 
 // ─── App credentials and webhooks ──────────────────────────────────────────────
 
+/**
+ * The webhook verify token the app makes up for an organization, so nobody has to invent one.
+ * Shown (copyable) in Settings → Connections; a token typed there takes precedence. The first
+ * entry is the one to display; the rest stay valid after an ENCRYPTION_KEY rotation.
+ */
+export function generatedMetaVerifyTokens(keyring: Keyring, organizationId: string): string[] {
+  return keyring.deriveTokens(`meta-verify-token|${organizationId}`)
+}
+
 /** Settings → Connections → Meta app, or null when it isn't set up. */
 export async function loadMetaApp(
   prisma: PrismaClient,

@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory"
 import { HTTPException } from "hono/http-exception"
-import { hasRole, parseMemberRole, type Role } from "@inbox/core"
+import { DEMO_ORG_METADATA, hasRole, parseMemberRole, type Role } from "@inbox/core"
 import type { PrismaClient } from "@inbox/db"
 import type { AppEnv, AuthLike, OrgContext } from "../types"
 
@@ -28,7 +28,7 @@ export function prismaOrgResolver(prisma: PrismaClient): OrgResolver {
  */
 export interface DevPreview {
   role: Role
-  /** The org the preview acts in: the first real org if one exists, else a virtual one. */
+  /** The org the preview acts in: the demo workspace, else the first org, else a virtual one. */
   resolveOrg(): Promise<{ id: string; name: string }>
 }
 
@@ -43,6 +43,11 @@ export function prismaDevPreview(prisma: PrismaClient, role: Role): DevPreview {
   return {
     role,
     async resolveOrg() {
+      const demo = await prisma.organization.findFirst({
+        where: { metadata: DEMO_ORG_METADATA },
+        select: { id: true, name: true },
+      })
+      if (demo) return demo
       const org = await prisma.organization.findFirst({
         orderBy: { createdAt: "asc" },
         select: { id: true, name: true },

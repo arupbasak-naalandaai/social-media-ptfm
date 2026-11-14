@@ -14,6 +14,7 @@ import {
   CircleSlash,
   Clock,
   Copy,
+  CornerDownLeft,
   ExternalLink,
   EyeOff,
   MessageSquareOff,
@@ -118,7 +119,10 @@ export function OpenInAppButton({
 
 // ─── Thread ───────────────────────────────────────────────────────────────────
 
-function placeholder(entry: Pick<ThreadEntry, "eventKind">, type: ItemDetail["type"]): string {
+export function placeholder(
+  entry: Pick<ThreadEntry, "eventKind">,
+  type: ItemDetail["type"],
+): string {
   if (entry.eventKind === "story_mention") return "Mentioned you in their story"
   if (entry.eventKind === "story_reaction") return "Reacted to your story"
   if (entry.eventKind === "deleted") return "Deleted on the platform"
@@ -641,15 +645,18 @@ function AiDrafts({
           </p>
         ) : null}
         {item.aiDrafts.map((d) => (
-          <div
+          <button
             key={d.id}
-            className={cn("space-y-2 rounded-lg border p-3 text-sm", pending && "opacity-50")}
+            type="button"
+            onClick={() => onUse(d)}
+            disabled={pending}
+            className="group block w-full rounded-lg border bg-background px-3 py-2.5 text-left text-sm transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
           >
-            <p className="whitespace-pre-wrap">{d.text}</p>
-            <Button size="sm" variant="outline" onClick={() => onUse(d)}>
-              Use this draft
-            </Button>
-          </div>
+            <span className="block leading-relaxed whitespace-pre-wrap">{d.text}</span>
+            <span className="mt-1.5 inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
+              <CornerDownLeft className="size-3" /> Use this draft
+            </span>
+          </button>
         ))}
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[11px] text-muted-foreground">

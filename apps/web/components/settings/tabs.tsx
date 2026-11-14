@@ -1,8 +1,9 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { toast } from "sonner"
 import { CircleCheck, CircleX, Info, Loader2, PlugZap, TriangleAlert } from "lucide-react"
 import {
   Controller,
@@ -269,8 +270,8 @@ export function ConnectionsTab({ data }: { data: SettingsResponse }) {
             error={sf.secretErrors.metaAppSecret}
           />
           <SecretField
-            label="Webhook verify token"
-            description="Any random string; paste the same value in the Meta app’s webhook setup."
+            label="Webhook verify token (optional)"
+            description="Leave empty to use the generated token below. A token typed here replaces it."
             status={secrets.metaVerifyToken}
             draft={sf.secrets.metaVerifyToken}
             onDraft={(v) => sf.setSecret("metaVerifyToken", v)}
@@ -281,21 +282,36 @@ export function ConnectionsTab({ data }: { data: SettingsResponse }) {
           <CopyField label="Webhook callback URL" value={meta.webhookUrls.meta} />
           <CopyField label="OAuth redirect URI" value={meta.oauthRedirectUrls.meta} />
         </Grid>
+        {secrets.metaVerifyToken.set ? null : (
+          <Grid>
+            <CopyField
+              label="Webhook verify token (generated)"
+              value={meta.metaVerifyToken}
+              description="Paste this in the Meta app’s webhook setup."
+            />
+          </Grid>
+        )}
       </SettingsCard>
 
       <SettingsCard
         title="Google (Business Profile + YouTube)"
-        description="An OAuth client in your Google Cloud project. This is separate from the sign-in client."
+        description={
+          meta.signInGoogleClient
+            ? "The sign-in client (GOOGLE_CLIENT_ID) is used, so the client fields are optional. Fill them only to use a different client."
+            : "An OAuth client in your Google Cloud project. Or set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and the sign-in client is used."
+        }
       >
         <Grid>
           <TextField
             control={control}
             name="google.clientId"
-            label="OAuth client ID"
+            label={meta.signInGoogleClient ? "OAuth client ID (optional)" : "OAuth client ID"}
             placeholder="…apps.googleusercontent.com"
           />
           <SecretField
-            label="OAuth client secret"
+            label={
+              meta.signInGoogleClient ? "OAuth client secret (optional)" : "OAuth client secret"
+            }
             status={secrets.googleClientSecret}
             draft={sf.secrets.googleClientSecret}
             onDraft={(v) => sf.setSecret("googleClientSecret", v)}
@@ -411,7 +427,31 @@ export function FiltersTab({ data }: { data: SettingsResponse }) {
 
 const AI_KEY = AI_PROVIDER_SECRET
 
+/** Shows the result of the "Connect OpenRouter" round trip (?connected / ?error) once. */
+function useOpenRouterResult() {
+  const params = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const shown = useRef(false)
+  useEffect(() => {
+    if (shown.current) return
+    const connected = params.get("connected") === "openrouter"
+    const error = params.get("error")
+    if (!connected && !error) return
+    shown.current = true
+    if (error) toast.error("Couldn’t connect OpenRouter", { description: error, duration: 15_000 })
+    if (connected) {
+      toast.success("OpenRouter connected", {
+        description:
+          "The key is saved and OpenRouter is now the provider. Pick a model and test it.",
+      })
+    }
+    router.replace(`${pathname}?tab=ai`, { scroll: false })
+  }, [params, router, pathname])
+}
+
 export function AiTab({ data }: { data: SettingsResponse }) {
+  useOpenRouterResult()
   const sf = useSectionForm("ai", data)
   const { control } = sf.form
   const provider = useWatch({ control, name: "provider" }) ?? "anthropic"
@@ -431,6 +471,24 @@ export function AiTab({ data }: { data: SettingsResponse }) {
         description="Drafts are suggestions: every public reply still needs a person to press Send. Drafting starts in Phase 4."
       >
         <SwitchField control={control} name="enabled" label="Draft replies with AI" />
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">Sign in with OpenRouter</p>
+            <p className="text-xs text-muted-foreground">
+              No key to paste: sign in and the key is saved for you. One account reaches Claude, GPT
+              and Gemini models.
+              {secrets.openrouterApiKey.set ? " A key is saved; connecting again replaces it." : ""}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            nativeButton={false}
+            render={<a href="/api/oauth/openrouter/start" />}
+          >
+            <PlugZap />
+            {secrets.openrouterApiKey.set ? "Reconnect OpenRouter" : "Connect OpenRouter"}
+          </Button>
+        </div>
         <Grid>
           <SelectField
             control={control}

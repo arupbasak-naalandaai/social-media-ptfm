@@ -12,6 +12,13 @@ try {
 const apiInternalUrl = (process.env.API_INTERNAL_URL ?? "http://localhost:3001").replace(/\/+$/, "")
 
 const nextConfig: NextConfig = {
+  // One Tap needs the sign-in client ID in the browser. It's public, and the same value as
+  // GOOGLE_CLIENT_ID, so there's no need to set it twice: NEXT_PUBLIC_GOOGLE_CLIENT_ID is only
+  // an override.
+  env: {
+    NEXT_PUBLIC_GOOGLE_CLIENT_ID:
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "",
+  },
   experimental: {
     agentFeedback: true,
   },

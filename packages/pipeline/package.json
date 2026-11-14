@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "seed": "tsx src/seed/run.ts",
+    "demo:remove": "tsx src/seed/remove-demo.ts",
     "simulate:webhook": "tsx src/dev/simulate-webhook.ts"
   },
   "dependencies": {

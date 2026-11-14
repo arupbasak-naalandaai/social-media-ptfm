@@ -128,6 +128,27 @@ describe.skipIf(!url)("Meta webhooks + Meta/YouTube connect (integration)", () =
     expect(bad.status).toBe(403)
   })
 
+  it("accepts the generated verify token when none is typed, and shows it to admins", async () => {
+    await prisma!.settings.update({
+      where: { organizationId: ORG },
+      data: {
+        connections: {
+          meta: { appId: "1234567890" },
+          secrets: { metaAppSecret: secret("metaAppSecret", APP_SECRET) },
+        } as Prisma.InputJsonObject,
+      },
+    })
+    const list = (await (await app().request("/api/connections")).json()) as ConnectionsResponse
+    const generated = list.setup.metaVerifyToken.generated
+    expect(list.setup.metaVerifyToken.custom).toBe(false)
+    expect(generated).toMatch(/^[\w-]{32}$/)
+    const ok = await app().request(
+      `/webhooks/meta?hub.mode=subscribe&hub.verify_token=${generated}&hub.challenge=xyz`,
+    )
+    expect(ok.status).toBe(200)
+    expect(await ok.text()).toBe("xyz")
+  })
+
   it("stores a signed delivery once and queues ingest; rejects bad signatures", async () => {
     const post = (body: string, signature?: string) =>
       app().request("/webhooks/meta", {
@@ -158,7 +179,7 @@ describe.skipIf(!url)("Meta webhooks + Meta/YouTube connect (integration)", () =
     expect(list.webhooks.meta.lastValidAt).not.toBeNull()
     expect(list.setup).toMatchObject({
       publicUrlReachable: true,
-      metaVerifyTokenSet: true,
+      metaVerifyToken: { custom: true, generated: null },
       webhookUrls: { meta: `${API}/webhooks/meta` },
       redirectUris: { meta: `${WEB}/api/oauth/meta/callback` },
     })
@@ -274,7 +295,7 @@ describe.skipIf(!url)("Meta webhooks + Meta/YouTube connect (integration)", () =
   it("connects YouTube channels through the Google callback with the YouTube scope", async () => {
     const to = new URL((await app().request("/api/oauth/youtube/start")).headers.get("location")!)
     expect(to.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/youtube.force-ssl")
-    expect(to.searchParams.get("redirect_uri")).toBe(`${WEB}/api/oauth/google/callback`)
+    expect(to.searchParams.get("redirect_uri")).toBe(`${WEB}/api/auth/callback/google`)
 
     vi.stubGlobal("fetch", async (input: string | URL) => {
       const u = String(input)
@@ -294,7 +315,7 @@ describe.skipIf(!url)("Meta webhooks + Meta/YouTube connect (integration)", () =
       return json({ error: { message: "unexpected" } }, 500)
     })
     const res = await app().request(
-      `/api/oauth/google/callback?code=abc&state=${to.searchParams.get("state")}`,
+      `/api/auth/callback/google?code=abc&state=${to.searchParams.get("state")}`,
     )
     const back = new URL(res.headers.get("location")!)
     expect(Object.fromEntries(back.searchParams)).toEqual({ connected: "youtube", count: "1" })

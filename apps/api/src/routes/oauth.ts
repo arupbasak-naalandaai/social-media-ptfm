@@ -6,7 +6,12 @@
  * use, 10 min.
  *
  * - Google Business Profile: `/google/start` → `/google/callback`
- * - YouTube: `/youtube/start` → the same Google callback (one redirect URI for the client)
+ * - YouTube: `/youtube/start` → the same Google callback
+ *
+ * Google's redirect URI is better-auth's own (`WEB_URL/api/auth/callback/google`), so one OAuth
+ * client needs a single redirect URI for sign-in and connections. `app.ts` routes a callback to
+ * `/google/callback` when its `state` is one of ours ({@link isGoogleConnectState}); everything
+ * else goes to better-auth.
  * - Facebook Pages + linked Instagram accounts: `/meta/start` → `/meta/callback`
  */
 import { randomBytes } from "node:crypto"
@@ -50,6 +55,20 @@ export interface OAuthRouteDeps {
 }
 
 const STATE_TTL_MS = 10 * 60 * 1000
+
+/** better-auth's Google callback, shared with the connect flow (one redirect URI). */
+export const GOOGLE_CALLBACK_PATH = "/api/auth/callback/google"
+export const googleRedirectUri = (webUrl: string) => `${webUrl}${GOOGLE_CALLBACK_PATH}`
+
+/** True when `state` was issued by `/google/start` or `/youtube/start` (not by better-auth). */
+export async function isGoogleConnectState(prisma: PrismaClient, state: string | undefined) {
+  if (!state) return false
+  const row = await prisma.verification.findFirst({
+    where: { identifier: `oauth:google:${state}` },
+    select: { id: true },
+  })
+  return Boolean(row)
+}
 const stateAad = (state: string) => aadFor("-", "oauth_state", state)
 
 type Product = "google_business" | "youtube" | "meta"
@@ -67,7 +86,7 @@ type AppContext = Context<AppEnv>
 
 export function oauthRoutes({ prisma, keyring, urls, logger }: OAuthRouteDeps) {
   const redirect = {
-    google: `${urls.webUrl}/api/oauth/google/callback`,
+    google: googleRedirectUri(urls.webUrl),
     meta: `${urls.webUrl}/api/oauth/meta/callback`,
   }
   const back = (params: Record<string, string>) =>
@@ -151,7 +170,8 @@ export function oauthRoutes({ prisma, keyring, urls, logger }: OAuthRouteDeps) {
     if (!client) {
       return c.redirect(
         back({
-          error: "Add the Google OAuth client ID and secret in Settings → Connections first.",
+          error:
+            "No Google OAuth client: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (the sign-in client), or add one in Settings → Connections.",
         }),
       )
     }

@@ -518,15 +518,22 @@ function SetupChecklist({
       </CheckItem>,
     )
     add(
-      setup.metaVerifyTokenSet ? "ok" : "todo",
-      <CheckItem
-        key="token"
-        state={setup.metaVerifyTokenSet ? "ok" : "todo"}
-        title="Webhook verify token"
-      >
-        <p className="text-xs text-muted-foreground">
-          Any random string, saved in {settingsLink} and pasted in the Meta app’s webhook setup.
-        </p>
+      "ok",
+      <CheckItem key="token" state="ok" title="Webhook verify token">
+        {setup.metaVerifyToken.generated ? (
+          <CopyField
+            label="Paste in the Meta app’s webhook setup (generated for you)"
+            value={setup.metaVerifyToken.generated}
+          />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {setup.metaVerifyToken.custom ? (
+              <>Using the token saved in {settingsLink}.</>
+            ) : (
+              "Generated automatically. An admin can copy it from here."
+            )}
+          </p>
+        )}
       </CheckItem>,
     )
     add(
@@ -567,8 +574,20 @@ function SetupChecklist({
         title="Google OAuth client (Web application)"
       >
         <p className="text-xs text-muted-foreground">
-          Google Cloud console → APIs &amp; Services → Credentials. Save the client ID and secret in{" "}
-          {settingsLink}. Publish the OAuth app: in “Testing”, access expires after 7 days.
+          {setup.googleClient === "sign-in" ? (
+            <>
+              Using the sign-in client (<code>GOOGLE_CLIENT_ID</code>). Nothing to enter: enable the
+              API in that Google Cloud project and add the redirect URI below.
+            </>
+          ) : setup.googleClient === "settings" ? (
+            <>Using the client saved in {settingsLink}.</>
+          ) : (
+            <>
+              Set <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code> (the sign-in
+              client covers this too), or save a separate client in {settingsLink}.
+            </>
+          )}{" "}
+          Publish the OAuth app: in “Testing”, access expires after 7 days.
         </p>
       </CheckItem>,
     )
@@ -576,7 +595,7 @@ function SetupChecklist({
       "ok",
       <CheckItem key="redirect" state="ok" title="Authorized redirect URI">
         <CopyField
-          label={`Add to the OAuth client (${isYoutube ? "the same URI as Business Profile" : "also used by YouTube"})`}
+          label="Add to the OAuth client (the same URI as Google sign-in)"
           value={setup.redirectUris.google}
         />
       </CheckItem>,

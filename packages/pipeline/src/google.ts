@@ -96,7 +96,27 @@ export interface GoogleClient {
   clientSecret: string
 }
 
-/** Settings → Connections → Google OAuth client, or null when not set up. */
+let signInClient: GoogleClient | null = null
+
+/**
+ * Registers the sign-in OAuth client (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) as the fallback
+ * for Business Profile + YouTube connections, so one Google client covers everything. Call
+ * once at startup in every process that talks to Google (api and worker).
+ */
+export function setSignInGoogleClient(clientId: string, clientSecret: string): void {
+  signInClient = clientId && clientSecret ? { clientId, clientSecret } : null
+}
+
+/** Whether a sign-in client is registered (connections can work with no Settings input). */
+export function hasSignInGoogleClient(): boolean {
+  return signInClient !== null
+}
+
+/**
+ * The OAuth client for Business Profile + YouTube: Settings → Connections → Google when both
+ * fields are set, else the sign-in client, else null. Keep using the same one once accounts are
+ * connected: refresh tokens only work with the client that issued them.
+ */
 export async function loadGoogleClient(
   prisma: PrismaClient,
   keyring: Keyring,
@@ -110,8 +130,10 @@ export async function loadGoogleClient(
     "connections",
     "googleClientSecret",
   )
-  if (!connections.google.clientId || !clientSecret) return null
-  return { clientId: connections.google.clientId, clientSecret }
+  if (connections.google.clientId && clientSecret) {
+    return { clientId: connections.google.clientId, clientSecret }
+  }
+  return signInClient
 }
 
 export function pkcePair(): { verifier: string; challenge: string } {
@@ -258,7 +280,11 @@ export async function googleAccessToken(
   }
   const client = await loadGoogleClient(prisma, keyring, org)
   if (!client) {
-    throw new GoogleApiError("Google OAuth client isn't set in Settings → Connections", 0, false)
+    throw new GoogleApiError(
+      "No Google OAuth client: set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET or add one in Settings → Connections",
+      0,
+      false,
+    )
   }
   const refreshToken = keyring.decrypt(account.refreshTokenEnc, tokenAad(org, account, "refresh"))
   let token: GoogleToken

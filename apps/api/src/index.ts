@@ -3,6 +3,7 @@ import { createAuth } from "@inbox/auth"
 import { createKeyring } from "@inbox/core/crypto"
 import { createLogger } from "@inbox/core/logger"
 import { getPrisma } from "@inbox/db"
+import { setSignInGoogleClient } from "@inbox/pipeline"
 import { createApp } from "./app"
 import { loadEnv } from "./env"
 import { InboxEventBus } from "./lib/events"
@@ -16,6 +17,8 @@ const prisma = getPrisma()
 if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
   logger.warn("GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set: Google sign-in will fail")
 }
+// The sign-in client also runs Business Profile + YouTube connections unless Settings has its own.
+setSignInGoogleClient(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET)
 
 const auth = createAuth(
   prisma,

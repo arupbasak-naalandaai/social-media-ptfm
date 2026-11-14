@@ -9,7 +9,12 @@ import { pubsubPushSchema } from "@inbox/core"
 import type { Keyring } from "@inbox/core/crypto"
 import type { Logger } from "@inbox/core/logger"
 import type { Prisma, PrismaClient } from "@inbox/db"
-import { loadSettingsSecret, loadSettingsSection, verifyMetaSignature } from "@inbox/pipeline"
+import {
+  generatedMetaVerifyTokens,
+  loadSettingsSecret,
+  loadSettingsSection,
+  verifyMetaSignature,
+} from "@inbox/pipeline"
 import type { JobSender } from "../lib/jobs"
 import type { AppEnv } from "../types"
 
@@ -91,7 +96,17 @@ export function webhookRoutes(deps: WebhookDeps) {
         const challenge = c.req.query("hub.challenge") ?? ""
         if (mode !== "subscribe" || !token)
           return c.json({ error: "Not a subscription check" }, 400)
-        const match = (await metaSecrets("metaVerifyToken")).find((s) => s.secret === token)
+        // A token typed in Settings, else the one the app generated for that workspace.
+        let match: { organizationId: string } | undefined = (
+          await metaSecrets("metaVerifyToken")
+        ).find((s) => s.secret === token)
+        if (!match && deps.keyring) {
+          const keyring = deps.keyring
+          const orgs = await deps.prisma.settings.findMany({ select: { organizationId: true } })
+          match = orgs.find(({ organizationId }) =>
+            generatedMetaVerifyTokens(keyring, organizationId).includes(token),
+          )
+        }
         if (!match) {
           deps.logger.warn("meta webhook verification: verify token didn't match any workspace")
           return c.json({ error: "Verify token doesn't match" }, 403)

@@ -24,20 +24,20 @@ Requirements: Node 24 (`.nvmrc`; 26 also works), pnpm 10, and Postgres 16+ (nati
 1. Install and configure:
    ```sh
    pnpm install
-   cp .env.example .env
-   pnpm gen:key   # run twice: paste into BETTER_AUTH_SECRET and ENCRYPTION_KEY
+   pnpm setup:env   # creates .env and fills BETTER_AUTH_SECRET + ENCRYPTION_KEY
    ```
-   Then set `DATABASE_URL` in `.env`.
-2. Create a Google OAuth client for sign-in (Google Cloud Console → Credentials → OAuth client ID → Web application):
+   Check `DATABASE_URL` in `.env`.
+2. Create one Google OAuth client (Google Cloud Console → Credentials → OAuth client ID → Web application). It's used for sign-in **and** for the Business Profile / YouTube connections:
    - Authorized JavaScript origins: `http://localhost:3000` and `http://localhost` (One Tap needs both).
-   - Authorized redirect URI: `http://localhost:3000/api/auth/callback/google`.
-   - Put the ID in `GOOGLE_CLIENT_ID` **and** `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, and the secret in `GOOGLE_CLIENT_SECRET`.
+   - Authorized redirect URI: `http://localhost:3000/api/auth/callback/google` (sign-in and the Business Profile / YouTube connections share it).
+   - Put the ID in `GOOGLE_CLIENT_ID` and the secret in `GOOGLE_CLIENT_SECRET` (the browser gets the ID automatically).
+   - To connect Business Profile / YouTube later, enable those APIs in the same project. Nothing else to enter.
 3. Create the database schema:
    ```sh
    pnpm db:deploy     # apply migrations (use pnpm db:migrate when changing the schema)
-   pnpm db:seed       # demo workspace: 5 demo accounts, default filter rules + lists, ~100 items
+   pnpm db:seed       # optional demo workspace: 5 demo accounts, default filter rules + lists, ~100 items
    ```
-   The seed runs every item through the real filter pipeline. Re-running it keeps your rule edits; `pnpm db:seed --reset` replaces the seeded items. The first Google sign-in claims the seeded workspace as owner.
+   The demo is its own workspace. Signing in with Google never shows it: your account gets a real, empty workspace with the default filter rules. You only see the demo signed out with `DEV_AUTH_BYPASS=true`. The seed runs every item through the real filter pipeline. Re-running it keeps rule edits; `pnpm db:seed --reset` replaces the seeded items. On a database where a real account already claimed the demo, `pnpm db:demo:remove` (add `--dry-run` to preview) removes the demo content from it.
 4. Run everything:
    ```sh
    pnpm dev           # web :3000, api :3001, worker :3002

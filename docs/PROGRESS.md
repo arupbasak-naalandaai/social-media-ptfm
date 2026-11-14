@@ -213,7 +213,7 @@ Requested after Phase 2: a separate section for people you already interacted wi
 
 ### Decisions and deviations
 
-- **OAuth redirect URI is on the web domain:** `WEB_URL/api/oauth/google/callback`, proxied to the api, instead of the api's public domain. The session cookie comes along, so the callback is bound to the admin who started it. State and the PKCE verifier are kept server-side (encrypted, single use, 10 min). Settings shows this URI to paste into the Google OAuth client.
+- **OAuth redirect URI is on the web domain and shared with sign-in:** `WEB_URL/api/auth/callback/google` (better-auth's), proxied to the api. `app.ts` sends a callback whose `state` was issued by `/api/oauth/{google,youtube}/start` to `/api/oauth/google/callback`; any other state goes to better-auth. The session cookie comes along, so the callback is bound to the admin who started it. State and the PKCE verifier are kept server-side (encrypted, single use, 10 min). Settings shows this URI to paste into the Google OAuth client.
 - **Tokens per location:** each location row stores the (same) Google tokens, encrypted with AAD `orgId|platform_account|google_business:<locationId>:<access|refresh>`. Disconnecting one location doesn't revoke the Google grant, because the other locations share it.
 - **Pub/Sub is a hint:** the payload format isn't documented, so a push only triggers an immediate reconcile poll for that location. The poll is the single source of review data.
 - **Reconcile cursor** = the newest `updateTime` seen. A first backfill with over 1,000 reviews skips the older ones (logged).
@@ -224,7 +224,7 @@ Requested after Phase 2: a separate section for people you already interacted wi
 ### Needed from you (to run the acceptance)
 
 1. **GBP API access:** the profile must be verified and active for 60+ days and have a website. Submit Google's access form with the GCP project number. Quota is 0 until approved.
-2. **A GCP OAuth client** (Web application) with redirect URI `<WEB_URL>/api/oauth/google/callback`. Enable the Business Profile APIs (Account Management, Business Information, My Business Notifications, plus v4 reviews). **Publish the OAuth app**: in "Testing", Google refresh tokens expire after 7 days.
+2. **A GCP OAuth client** (Web application) with redirect URI `<WEB_URL>/api/auth/callback/google` (the sign-in one). Enable the Business Profile APIs (Account Management, Business Information, My Business Notifications, plus v4 reviews). **Publish the OAuth app**: in "Testing", Google refresh tokens expire after 7 days.
 3. **Pub/Sub** (optional; without it, reviews arrive on the 30-min reconcile): a topic with `mybusiness-api-pubsub@system.gserviceaccount.com` as Publisher, and a push subscription to `<API_PUBLIC_URL>/webhooks/google` with OIDC auth (a service account; put its email in Settings). This needs a **public HTTPS URL**, i.e. Phase D.
 4. **An AI key** (Claude, ChatGPT or Gemini) and a model ID in Settings → AI replies, then "Test connection".
 

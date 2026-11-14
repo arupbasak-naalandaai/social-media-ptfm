@@ -86,7 +86,7 @@ export function SignInCard() {
         </Button>
         {!publicEnv.googleClientId ? (
           <p className="text-center text-xs text-muted-foreground">
-            One Tap is off: NEXT_PUBLIC_GOOGLE_CLIENT_ID isn’t set.
+            One Tap is off: GOOGLE_CLIENT_ID isn’t set.
           </p>
         ) : null}
       </CardContent>

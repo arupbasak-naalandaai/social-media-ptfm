@@ -1,6 +1,7 @@
 import { createKeyring } from "@inbox/core/crypto"
 import { createLogger } from "@inbox/core/logger"
 import { getPrisma } from "@inbox/db"
+import { setSignInGoogleClient } from "@inbox/pipeline"
 import { startBoss } from "./boss"
 import { loadEnv } from "./env"
 import { startHealthServer, type HealthState } from "./health"
@@ -19,6 +20,7 @@ const logger = createLogger("worker")
 const env = loadEnv()
 const prisma = getPrisma()
 const keyring = createKeyring(env.ENCRYPTION_KEY, env.ENCRYPTION_KEYS_PREVIOUS)
+setSignInGoogleClient(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET)
 
 const state: HealthState = {
   bossStarted: false,

@@ -343,6 +343,10 @@ export interface SettingsResponse {
     }
     /** Included YouTube channels (for the quota meter). */
     youtubeChannels: number
+    /** GOOGLE_CLIENT_ID / SECRET are set, so the Google fields in Connections are optional. */
+    signInGoogleClient: boolean
+    /** The generated Meta webhook verify token (used when none is typed in Settings). */
+    metaVerifyToken: string
   }
 }
 
@@ -538,7 +542,14 @@ export interface ConnectionsResponse {
     publicUrlReachable: boolean
     webhookUrls: Record<WebhookSource, string>
     redirectUris: { google: string; meta: string }
-    metaVerifyTokenSet: boolean
+    /** Which Google OAuth client the Connect buttons use: Settings, the sign-in client, or none. */
+    googleClient: "settings" | "sign-in" | null
+    metaVerifyToken: {
+      /** A token was typed in Settings → Connections (it takes precedence). */
+      custom: boolean
+      /** The token the app generated (admins only, and only when no custom one is set). */
+      generated: string | null
+    }
     googlePubsubTopicSet: boolean
   }
 }

@@ -207,7 +207,7 @@ These live in `packages/core/config/platform-versions.ts`. Each can be overridde
   - Ciphertext format: `v1:<keyId>:<iv>:<tag>:<ct>` (base64url).
   - AAD = `organizationId|model|field`, so a ciphertext can't be copied into another row.
   - `keyId` allows rotation later (`ENCRYPTION_KEYS_PREVIOUS`).
-- **Stored encrypted:** platform tokens, platform app secrets, Slack bot token and signing secret, AI API keys, Meta verify token, LinkedIn client secret.
+- **Stored encrypted:** platform tokens, platform app secrets, Slack bot token and signing secret, AI API keys (typed, or received from the "Connect OpenRouter" login), a custom Meta verify token (otherwise one is derived from `ENCRYPTION_KEY` per workspace and shown in Settings), LinkedIn client secret.
 - **Never returned to the browser.** API responses contain `{ set: true, last4: "abcd" }`. Logs pass through a pino redaction list (`*.token`, `*.secret`, `authorization`, `cookie`, …).
 - **Environment variables** hold only bootstrap secrets (§9).
 
@@ -385,9 +385,9 @@ evaluate(item: FilterInput, rules: FilterRule[], ctx: FilterContext): FilterResu
 | `DATABASE_URL`                              |     |  ✓  |   ✓    | `${{Postgres.DATABASE_URL}}` (private)                                                                                                |
 | `BETTER_AUTH_SECRET`                        |     |  ✓  |        | 32+ random bytes                                                                                                                      |
 | `BETTER_AUTH_URL`                           |     |  ✓  |        | = `WEB_URL` (cookies live on the web domain)                                                                                          |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` |     |  ✓  |        | **Sign-in** OAuth client only (separate from the GBP connection client)                                                               |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`              |  ✓  |     |        | Same value as `GOOGLE_CLIENT_ID` (public). Used by the One Tap client. Needed at web build time                                       |
-| `ENCRYPTION_KEY`                            |     |  ✓  |   ✓    | 32 bytes base64. Generate with `pnpm gen:key`                                                                                         |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` |  ✓  |  ✓  |   ✓    | One client for sign-in and the GBP/YouTube connections (Settings → Connections can override). Web reads the ID at build time          |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`              |  ✓  |     |        | Optional override for One Tap; defaults to `GOOGLE_CLIENT_ID`                                                                         |
+| `ENCRYPTION_KEY`                            |     |  ✓  |   ✓    | 32 bytes base64. `pnpm setup:env` fills it locally (or `pnpm gen:key`)                                                                |
 | `WEB_URL`                                   |  ✓  |  ✓  |   ✓    | `https://${{web.RAILWAY_PUBLIC_DOMAIN}}` or custom domain                                                                             |
 | `API_PUBLIC_URL`                            |     |  ✓  |   ✓    | `https://${{api.RAILWAY_PUBLIC_DOMAIN}}`. Shown in Settings as the webhook base                                                       |
 | `API_INTERNAL_URL`                          |  ✓  |     |        | `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`. **Needed at web build time** (rewrites are compiled into the routes manifest) |

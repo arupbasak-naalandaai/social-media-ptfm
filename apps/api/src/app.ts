@@ -15,7 +15,8 @@ import { listRoutes } from "./routes/lists"
 import { meRoutes } from "./routes/me"
 import { settingsRoutes } from "./routes/settings"
 import { connectionRoutes } from "./routes/connections"
-import { oauthRoutes } from "./routes/oauth"
+import { GOOGLE_CALLBACK_PATH, isGoogleConnectState, oauthRoutes } from "./routes/oauth"
+import { openrouterRoutes } from "./routes/openrouter"
 import { streamRoutes } from "./routes/stream"
 import { webhookRoutes, type WebhookDeps } from "./routes/webhooks"
 import { syncRoutes } from "./routes/sync"
@@ -52,6 +53,19 @@ export function createApp(deps: AppDeps) {
     return c.json({ status: db ? "ok" : "degraded", service: "api", db }, db ? 200 : 503)
   })
 
+  // The Business Profile / YouTube connect flow shares better-auth's Google redirect URI. A callback
+  // whose state we issued is re-dispatched to our handler (through the session middleware below);
+  // anything else is a sign-in and falls through to better-auth.
+  const prisma = deps.prisma
+  if (prisma && deps.jobs && deps.keyring) {
+    app.get(GOOGLE_CALLBACK_PATH, async (c, next) => {
+      if (!(await isGoogleConnectState(prisma, c.req.query("state")))) return next()
+      const url = new URL(c.req.url)
+      url.pathname = "/api/oauth/google/callback"
+      return app.fetch(new Request(url, c.req.raw), c.env)
+    })
+  }
+
   // better-auth owns everything under /api/auth/* (OAuth, One Tap, sessions, organization).
   app.on(["GET", "POST"], "/api/auth/*", (c) => deps.auth.handler(c.req.raw))
 
@@ -85,6 +99,15 @@ export function createApp(deps: AppDeps) {
       app.route(
         "/api/connections",
         connectionRoutes({ prisma: deps.prisma, keyring: deps.keyring, urls }),
+      )
+      app.route(
+        "/api/oauth/openrouter",
+        openrouterRoutes({
+          prisma: deps.prisma,
+          keyring: deps.keyring,
+          urls,
+          logger: deps.logger,
+        }),
       )
       app.route(
         "/api/oauth",

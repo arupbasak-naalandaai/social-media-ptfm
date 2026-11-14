@@ -8,6 +8,7 @@ import {
   type ConditionGroup,
   type FilterRule,
 } from "./types"
+import { DEFAULT_LOW_VALUE_PHRASES } from "./low-value"
 
 export type DefaultRuleDef = Omit<FilterRule, "id"> & { defaultKey: string }
 
@@ -375,3 +376,39 @@ export const DEFAULT_RULES: DefaultRuleDef[] = [
       ]),
   ),
 ]
+
+/**
+ * Rows for the default rules and the default keyword/domain lists of one organization: what a
+ * new real workspace starts with. Insert with `createMany({ skipDuplicates: true })` (rules are
+ * unique per `defaultKey`), so running it again only adds what's missing.
+ */
+export function defaultFilterRows(organizationId: string) {
+  const rules = DEFAULT_RULES.map(({ defaultKey, ...rule }) => ({
+    organizationId,
+    defaultKey,
+    isDefault: true,
+    name: rule.name,
+    description: rule.description ?? null,
+    enabled: rule.enabled,
+    priority: rule.priority,
+    stopProcessing: rule.stopProcessing,
+    dryRun: rule.dryRun,
+    platforms: rule.platforms as unknown,
+    itemTypes: rule.itemTypes as unknown,
+    conditions: rule.conditions as unknown,
+    actions: rule.actions as unknown,
+  }))
+  const entry = (list: string, kind: string) => (value: string) => ({
+    organizationId,
+    list,
+    kind,
+    value,
+    platform: null,
+  })
+  const lists = [
+    ...DEFAULT_SPAM_KEYWORDS.map(entry("spam_keywords", "keyword")),
+    ...DEFAULT_TRUSTED_DOMAINS.map(entry("trusted_domains", "domain")),
+    ...DEFAULT_LOW_VALUE_PHRASES.map(entry("low_value_phrases", "keyword")),
+  ]
+  return { rules, lists }
+}

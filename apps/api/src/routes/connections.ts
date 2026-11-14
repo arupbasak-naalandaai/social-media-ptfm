@@ -5,6 +5,7 @@ import {
   ACCOUNT_KINDS,
   SYNC_STREAMS,
   connectionPatchSchema,
+  hasRole,
   parseSectionSecrets,
   parseSectionValues,
   platformSchema,
@@ -19,7 +20,9 @@ import type { Keyring } from "@inbox/core/crypto"
 import type { PlatformAccount, PrismaClient } from "@inbox/db"
 import {
   addYoutubeQuota,
+  generatedMetaVerifyTokens,
   googleAccessToken,
+  hasSignInGoogleClient,
   isDemoAccount,
   listGbpReviews,
   listMyYoutubeChannels,
@@ -32,6 +35,7 @@ import {
 } from "@inbox/pipeline"
 import { validate } from "../lib/validate"
 import { requireAuth, requireRole } from "../middleware/session"
+import { googleRedirectUri } from "./oauth"
 import type { AppEnv } from "../types"
 
 const accountKindSchema = z.enum(ACCOUNT_KINDS)
@@ -227,7 +231,14 @@ export function connectionRoutes({
             ]
           }),
         }))
-        const googleConfigured = Boolean(values.google.clientId && secrets.googleClientSecret)
+        const googleClient =
+          values.google.clientId && secrets.googleClientSecret
+            ? ("settings" as const)
+            : hasSignInGoogleClient()
+              ? ("sign-in" as const)
+              : null
+        const googleConfigured = googleClient !== null
+        const isAdmin = hasRole(org.role, "admin")
         const api = urls.apiPublicUrl
         const body: ConnectionsResponse = {
           accounts,
@@ -243,10 +254,18 @@ export function connectionRoutes({
             publicUrlReachable: /^https:\/\//.test(api) && !/localhost|127\.0\.0\.1/.test(api),
             webhookUrls: { meta: `${api}/webhooks/meta`, google: `${api}/webhooks/google` },
             redirectUris: {
-              google: `${urls.webUrl}/api/oauth/google/callback`,
+              google: googleRedirectUri(urls.webUrl),
               meta: `${urls.webUrl}/api/oauth/meta/callback`,
             },
-            metaVerifyTokenSet: Boolean(secrets.metaVerifyToken),
+            googleClient,
+            metaVerifyToken: {
+              custom: Boolean(secrets.metaVerifyToken),
+              // Admins only: what to paste into the Meta app when no token was typed in Settings.
+              generated:
+                isAdmin && !secrets.metaVerifyToken
+                  ? (generatedMetaVerifyTokens(keyring, org.id)[0] ?? null)
+                  : null,
+            },
             googlePubsubTopicSet: Boolean(values.google.pubsubTopic),
           },
         }

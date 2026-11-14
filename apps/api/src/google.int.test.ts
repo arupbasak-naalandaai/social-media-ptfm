@@ -9,7 +9,7 @@ import type { ConnectionsResponse, IngestJobData } from "@inbox/core"
 import { createKeyring } from "@inbox/core/crypto"
 import { createLogger } from "@inbox/core/logger"
 import { createPrismaClient, type Prisma } from "@inbox/db"
-import { settingsSecretAad, tokenAad } from "@inbox/pipeline"
+import { setSignInGoogleClient, settingsSecretAad, tokenAad } from "@inbox/pipeline"
 import { createApp } from "./app"
 import type { JobSender } from "./lib/jobs"
 
@@ -182,13 +182,33 @@ describe.skipIf(!url)("Google connect + Pub/Sub (integration)", () => {
     expect(to.origin + to.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth")
     expect(Object.fromEntries(to.searchParams)).toMatchObject({
       client_id: "cid.apps.googleusercontent.com",
-      redirect_uri: `${WEB}/api/oauth/google/callback`,
+      redirect_uri: `${WEB}/api/auth/callback/google`,
       scope: "https://www.googleapis.com/auth/business.manage",
       access_type: "offline",
       prompt: "consent",
       code_challenge_method: "S256",
     })
     expect(await prisma!.verification.count()).toBe(1)
+  })
+
+  it("falls back to the sign-in client when Settings has no Google client", async () => {
+    await prisma!.settings.update({
+      where: { organizationId: ORG },
+      data: { connections: { google: {} } as Prisma.InputJsonObject },
+    })
+    const none = new URL((await app().request("/api/oauth/google/start")).headers.get("location")!)
+    expect(none.searchParams.get("error")).toMatch(/GOOGLE_CLIENT_ID/)
+
+    setSignInGoogleClient("signin.apps.googleusercontent.com", "signin-secret")
+    try {
+      const to = await start()
+      expect(to.searchParams.get("client_id")).toBe("signin.apps.googleusercontent.com")
+      const list = (await (await app().request("/api/connections")).json()) as ConnectionsResponse
+      expect(list.configured.google).toBe(true)
+      expect(list.setup.googleClient).toBe("sign-in")
+    } finally {
+      setSignInGoogleClient("", "")
+    }
   })
 
   it("callback stores encrypted tokens per location, sets up sync and notifications", async () => {
@@ -227,7 +247,7 @@ describe.skipIf(!url)("Google connect + Pub/Sub (integration)", () => {
       return json({ error: { message: "unexpected" } }, 500)
     })
 
-    const res = await app().request(`/api/oauth/google/callback?code=abc&state=${state}`)
+    const res = await app().request(`/api/auth/callback/google?code=abc&state=${state}`)
     expect(res.status).toBe(302)
     const back = new URL(res.headers.get("location")!)
     expect(back.pathname).toBe("/connections")
@@ -252,8 +272,11 @@ describe.skipIf(!url)("Google connect + Pub/Sub (integration)", () => {
     expect(await prisma!.syncState.count()).toBe(2)
     // The state is single-use.
     expect(await prisma!.verification.count()).toBe(0)
-    const replay = await app().request(`/api/oauth/google/callback?code=abc&state=${state}`)
-    expect(new URL(replay.headers.get("location")!).searchParams.get("error")).toMatch(
+    // A consumed state is no longer ours, so the shared callback hands it to better-auth (404 stub).
+    const replay = await app().request(`/api/auth/callback/google?code=abc&state=${state}`)
+    expect(replay.status).toBe(404)
+    const direct = await app().request(`/api/oauth/google/callback?code=abc&state=${state}`)
+    expect(new URL(direct.headers.get("location")!).searchParams.get("error")).toMatch(
       /expired or was already used/,
     )
 
@@ -275,7 +298,7 @@ describe.skipIf(!url)("Google connect + Pub/Sub (integration)", () => {
         scope: "https://www.googleapis.com/auth/business.manage",
       }),
     )
-    const res = await app().request(`/api/oauth/google/callback?code=abc&state=${state}`)
+    const res = await app().request(`/api/auth/callback/google?code=abc&state=${state}`)
     expect(new URL(res.headers.get("location")!).searchParams.get("error")).toMatch(/refresh token/)
     const denied = await app().request(`/api/oauth/google/callback?error=access_denied`)
     expect(new URL(denied.headers.get("location")!).searchParams.get("error")).toBe(

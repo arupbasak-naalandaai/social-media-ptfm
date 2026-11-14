@@ -29,7 +29,7 @@
     },
     "build": {
       "dependsOn": ["^generate", "generate", "^build"],
-      "env": ["API_INTERNAL_URL", "NEXT_PUBLIC_*", "WEB_URL"],
+      "env": ["API_INTERNAL_URL", "NEXT_PUBLIC_*", "WEB_URL", "GOOGLE_CLIENT_ID"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "dev": {

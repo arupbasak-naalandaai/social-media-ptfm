@@ -13,6 +13,9 @@ const envSchema = z.object({
     ),
   /** Comma-separated previous keys, still accepted for decryption after a rotation. */
   ENCRYPTION_KEYS_PREVIOUS: z.string().default(""),
+  /** The sign-in OAuth client; refreshes Google connection tokens when Settings has no client. */
+  GOOGLE_CLIENT_ID: z.string().default(""),
+  GOOGLE_CLIENT_SECRET: z.string().default(""),
 })
 
 export type WorkerEnv = z.infer<typeof envSchema> & { port: number }

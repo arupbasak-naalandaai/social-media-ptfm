@@ -17,10 +17,12 @@
     "db:migrate": "pnpm --filter @inbox/db migrate:dev",
     "db:deploy": "pnpm --filter @inbox/db migrate:deploy",
     "db:seed": "pnpm --filter @inbox/pipeline seed",
+    "db:demo:remove": "pnpm --filter @inbox/pipeline demo:remove",
     "simulate:webhook": "pnpm --filter @inbox/pipeline simulate:webhook",
     "db:studio": "pnpm --filter @inbox/db studio",
     "auth:generate": "pnpm --filter @inbox/auth schema:generate",
-    "gen:key": "node scripts/gen-encryption-key.mjs"
+    "gen:key": "node scripts/gen-encryption-key.mjs",
+    "setup:env": "node scripts/setup-env.mjs"
   },
   "devDependencies": {
     "prettier": "~3.10.1",

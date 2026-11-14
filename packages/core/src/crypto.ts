@@ -8,7 +8,7 @@
  *
  * Node-only: import from `@inbox/core/crypto`, never from the browser bundle.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto"
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto"
 
 const VERSION = "v1"
 const IV_BYTES = 12
@@ -26,6 +26,13 @@ export interface Keyring {
   readonly currentKeyId: string
   encrypt(plaintext: string, aad: string): string
   decrypt(ciphertext: string, aad: string): string
+  /**
+   * Stable, non-reversible tokens for `purpose` (HMAC of each key): the current key's first,
+   * then one per previous key. For values the app invents instead of asking for (e.g. the Meta
+   * webhook verify token); check incoming values against all of them so a key rotation
+   * doesn't break an existing setup.
+   */
+  deriveTokens(purpose: string): string[]
 }
 
 /** Stable, non-secret id for a key: first 8 bytes of SHA-256(key), base64url. */
@@ -54,8 +61,18 @@ export function createKeyring(current: string, previous: string | string[] = [])
     keys.set(keyIdFor(k), k)
   }
 
+  const derive = (key: Buffer, purpose: string) =>
+    createHmac("sha256", key)
+      .update(`derived-token|${purpose}`)
+      .digest()
+      .subarray(0, 24)
+      .toString("base64url")
+
   return {
     currentKeyId,
+    deriveTokens(purpose) {
+      return [...keys.values()].map((k) => derive(k, purpose))
+    },
     encrypt(plaintext, aad) {
       const iv = randomBytes(IV_BYTES)
       const cipher = createCipheriv("aes-256-gcm", currentKey, iv)

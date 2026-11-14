@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto"
 import type { Prisma, PrismaClient } from "@inbox/db"
 import {
+  defaultFilterRows,
   isEmailAllowed,
+  realOrganizationWhere,
   parseBootstrapAllowlist,
   parseGeneralSettings,
   parseMemberRole,
@@ -37,6 +39,8 @@ export function createAccessPolicy(
 
   async function orgAllowlists(): Promise<{ organizationId: string; general: GeneralSettings }[]> {
     const rows = await prisma.settings.findMany({
+      // The demo workspace is never joinable, whatever its allowlist says.
+      where: { organization: realOrganizationWhere() },
       select: { organizationId: true, general: true },
     })
     return rows.map((r) => ({
@@ -80,8 +84,9 @@ export function createAccessPolicy(
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BOOTSTRAP_LOCK_KEY})`
 
       if (await needsOwner(tx)) {
-        // Claim the oldest existing org (e.g. the seeded demo workspace) or create one.
+        // Claim the oldest real org (never the seeded demo workspace) or create a fresh one.
         const existing = await tx.organization.findFirst({
+          where: realOrganizationWhere(),
           orderBy: { createdAt: "asc" },
           select: { id: true, name: true },
         })
@@ -107,6 +112,13 @@ export function createAccessPolicy(
             emails: [...new Set([...prior.signInAllowlist.emails, email])],
           },
         }
+        // Default filter rules and lists (only the missing ones, so a claimed org keeps its edits).
+        const defaults = defaultFilterRows(organizationId)
+        await tx.filterRule.createMany({
+          data: defaults.rules as Prisma.FilterRuleCreateManyInput[],
+          skipDuplicates: true,
+        })
+        await tx.listEntry.createMany({ data: defaults.lists, skipDuplicates: true })
         await tx.member.deleteMany({ where: { organizationId, userId: user.id } })
         await tx.member.create({
           data: {
@@ -139,7 +151,10 @@ export function createAccessPolicy(
         return
       }
 
-      const rows = await tx.settings.findMany({ select: { organizationId: true, general: true } })
+      const rows = await tx.settings.findMany({
+        where: { organization: realOrganizationWhere() },
+        select: { organizationId: true, general: true },
+      })
       for (const row of rows) {
         if (!isEmailAllowed(user.email, parseGeneralSettings(row.general).signInAllowlist)) continue
         await joinAsMember(tx, row.organizationId, user.id)

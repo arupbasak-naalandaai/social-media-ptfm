@@ -28,6 +28,8 @@ import type { Prisma, PrismaClient, Settings } from "@inbox/db"
 import {
   AI_KEY_FOR,
   applySyncSettings,
+  generatedMetaVerifyTokens,
+  hasSignInGoogleClient,
   languageModelFor,
   listAiModels,
   loadSettingsSection,
@@ -37,6 +39,7 @@ import {
   testAiConnection,
 } from "@inbox/pipeline"
 import { requireAuth, requireRole } from "../middleware/session"
+import { googleRedirectUri } from "./oauth"
 import type { AppEnv } from "../types"
 
 export interface SettingsRouteDeps {
@@ -127,11 +130,13 @@ export function settingsRoutes({ prisma, keyring, urls }: SettingsRouteDeps) {
               slack: `${api}/slack/events`,
             },
             oauthRedirectUrls: {
-              google: `${urls.webUrl}/api/oauth/google/callback`,
+              google: googleRedirectUri(urls.webUrl),
               meta: `${urls.webUrl}/api/oauth/meta/callback`,
               linkedin: `${api}/oauth/linkedin/callback`,
             },
             youtubeChannels: await youtubeChannels(org.id),
+            signInGoogleClient: hasSignInGoogleClient(),
+            metaVerifyToken: generatedMetaVerifyTokens(keyring, org.id)[0] ?? "",
           },
         }
         return c.json(body)

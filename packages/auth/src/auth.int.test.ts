@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { createPrismaClient } from "@inbox/db"
-import { parseGeneralSettings } from "@inbox/core"
+import { DEFAULT_RULES, DEMO_ORG_METADATA, parseGeneralSettings } from "@inbox/core"
 import { createAuth } from "./auth"
 import { BOOTSTRAP_RESTRICTED, NOT_ALLOWLISTED } from "./access"
 
@@ -131,7 +131,7 @@ describe.skipIf(!url)("sign-in access policy (integration)", () => {
     ).not.toBeNull()
   })
 
-  it("lets the first real user claim a seeded org that has no owner", async () => {
+  it("lets the first real user claim an existing real org that has no owner", async () => {
     const auth = makeAuth()
     await prisma!.organization.create({
       data: { id: "seeded-org", name: "Demo workspace", slug: "demo", createdAt: new Date() },
@@ -154,5 +154,47 @@ describe.skipIf(!url)("sign-in access policy (integration)", () => {
 
     // The org now has an owner, so a stranger is rejected.
     await expect(signUp(auth, "stranger@other.com")).rejects.toThrow(NOT_ALLOWLISTED)
+  })
+
+  it("never puts a real account in the demo workspace", async () => {
+    const auth = makeAuth()
+    await prisma!.organization.create({
+      data: {
+        id: "demo-x",
+        name: "Demo workspace",
+        slug: "demo",
+        metadata: DEMO_ORG_METADATA,
+        createdAt: new Date(),
+      },
+    })
+    // Even an allowlist that matches everyone doesn't let anyone join it.
+    await prisma!.settings.create({
+      data: {
+        organizationId: "demo-x",
+        general: { signInAllowlist: { emails: [], domains: ["example.com"] } },
+      },
+    })
+
+    const owner = await signUp(auth, "me@example.com")
+    const member = await prisma!.member.findFirstOrThrow({ where: { userId: owner.id } })
+    expect(member.organizationId).not.toBe("demo-x")
+    expect(member.role).toBe("owner")
+    expect(await prisma!.member.count({ where: { organizationId: "demo-x" } })).toBe(0)
+
+    // The new real workspace starts with the default filters, and no demo content.
+    expect(
+      await prisma!.filterRule.count({ where: { organizationId: member.organizationId } }),
+    ).toBe(DEFAULT_RULES.length)
+    expect(
+      await prisma!.listEntry.count({ where: { organizationId: member.organizationId } }),
+    ).toBeGreaterThan(0)
+    expect(
+      await prisma!.platformAccount.count({ where: { organizationId: member.organizationId } }),
+    ).toBe(0)
+
+    const colleague = await signUp(auth, "colleague@example.com").catch(() => null)
+    expect(colleague).toBeNull()
+    const session = await startSession(auth, owner.id)
+    expect(session.activeOrganizationId).toBe(member.organizationId)
   })
 })

@@ -66,4 +66,15 @@ describe("keyring", () => {
   it("refuses keys that are not 32 bytes", () => {
     expect(() => createKeyring(randomBytes(16).toString("base64"))).toThrow(/32 bytes/)
   })
+
+  it("derives stable tokens per purpose, current key first, old keys still listed", () => {
+    const [a1] = createKeyring(keyA).deriveTokens("meta-verify|org-1")
+    expect(a1).toMatch(/^[\w-]{32}$/)
+    expect(createKeyring(keyA).deriveTokens("meta-verify|org-1")).toEqual([a1])
+    expect(createKeyring(keyA).deriveTokens("meta-verify|org-2")[0]).not.toBe(a1)
+    const rotated = createKeyring(keyB, keyA).deriveTokens("meta-verify|org-1")
+    expect(rotated).toHaveLength(2)
+    expect(rotated[0]).not.toBe(a1)
+    expect(rotated[1]).toBe(a1)
+  })
 })
