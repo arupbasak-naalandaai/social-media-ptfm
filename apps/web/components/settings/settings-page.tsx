@@ -23,7 +23,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/app/empty-state"
-import { useIsAdmin } from "@/components/app/me-context"
+import { useCan } from "@/components/app/me-context"
 import { relativeTime } from "@/lib/format"
 import { SyncTab } from "./sync-tab"
 import {
@@ -111,12 +111,12 @@ export function SettingsPage() {
 }
 
 function SettingsGate() {
-  const isAdmin = useIsAdmin()
-  if (!isAdmin) {
+  const canManage = useCan({ settings: ["manage"] })
+  if (!canManage) {
     return (
       <EmptyState
         icon={Lock}
-        title="Owners and admins only"
+        title="You don’t have access"
         description="Ask an owner or admin if you need to change workspace settings."
       />
     )

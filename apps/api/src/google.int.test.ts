@@ -2,6 +2,7 @@
  * Google connection flow and Pub/Sub push against a real database (TEST_DATABASE_URL).
  * Google's endpoints are stubbed (fetch) and push tokens are signed with a local key.
  */
+import { effectivePermissions } from "@inbox/core"
 import { randomBytes } from "node:crypto"
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
@@ -45,7 +46,14 @@ const app = () =>
         session: { id: "s-g", activeOrganizationId: ORG },
       }),
     },
-    orgs: { resolve: async () => ({ id: ORG, name: "G", role: "owner" }) },
+    orgs: {
+      resolve: async () => ({
+        id: ORG,
+        name: "G",
+        role: "owner",
+        permissions: effectivePermissions("owner", null),
+      }),
+    },
     logger,
     checkDb: async () => true,
     prisma: prisma!,

@@ -1,5 +1,6 @@
 "use client"
 
+import { IfCan } from "@/components/app/me-context"
 import { motion } from "motion/react"
 import { memo, type ReactNode } from "react"
 import {
@@ -275,25 +276,31 @@ function QuickActions({
         </Tooltip>
       ) : null}
       {isOpen ? (
-        <>
+        <IfCan request={{ inbox: ["reply"] }}>
           <ActionButton label="Reply" shortcut="r" onClick={() => onReply(item.id)}>
             <Reply />
           </ActionButton>
-          <ActionButton label="Resolve" shortcut="e" onClick={() => onAction(item.id, "resolve")}>
-            <CheckCircle2 />
+        </IfCan>
+      ) : null}
+      <IfCan request={{ inbox: ["triage"] }}>
+        {isOpen ? (
+          <>
+            <ActionButton label="Resolve" shortcut="e" onClick={() => onAction(item.id, "resolve")}>
+              <CheckCircle2 />
+            </ActionButton>
+            <ActionButton label="Ignore" shortcut="i" onClick={() => onAction(item.id, "ignore")}>
+              <CircleSlash />
+            </ActionButton>
+          </>
+        ) : (
+          <ActionButton label="Reopen" onClick={() => onAction(item.id, "reopen")}>
+            <RotateCcw />
           </ActionButton>
-          <ActionButton label="Ignore" shortcut="i" onClick={() => onAction(item.id, "ignore")}>
-            <CircleSlash />
-          </ActionButton>
-        </>
-      ) : (
-        <ActionButton label="Reopen" onClick={() => onAction(item.id, "reopen")}>
-          <RotateCcw />
+        )}
+        <ActionButton label="Archive" onClick={() => onAction(item.id, "archive")}>
+          <Archive />
         </ActionButton>
-      )}
-      <ActionButton label="Archive" onClick={() => onAction(item.id, "archive")}>
-        <Archive />
-      </ActionButton>
+      </IfCan>
     </div>
   )
 }

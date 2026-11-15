@@ -2,6 +2,7 @@
  * Settings → AI replies → "Connect OpenRouter" against a real database (TEST_DATABASE_URL).
  * OpenRouter's key endpoint is stubbed (fetch).
  */
+import { effectivePermissions } from "@inbox/core"
 import { createHash, randomBytes } from "node:crypto"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createKeyring } from "@inbox/core/crypto"
@@ -37,7 +38,14 @@ const app = (role: "owner" | "member" = "owner") =>
         session: { id: "s-or", activeOrganizationId: ORG },
       }),
     },
-    orgs: { resolve: async () => ({ id: ORG, name: "O", role }) },
+    orgs: {
+      resolve: async () => ({
+        id: ORG,
+        name: "O",
+        role,
+        permissions: effectivePermissions(role, null),
+      }),
+    },
     logger,
     checkDb: async () => true,
     prisma: prisma!,

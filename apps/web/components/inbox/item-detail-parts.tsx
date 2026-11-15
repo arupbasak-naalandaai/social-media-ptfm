@@ -34,7 +34,7 @@ import {
   type ReplyQueuedResponse,
   type ThreadEntry,
 } from "@inbox/core"
-import { useIsAdmin } from "@/components/app/me-context"
+import { IfCan, useCan } from "@/components/app/me-context"
 import { PLATFORM_LABELS } from "@/components/app/platform-icon"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -277,7 +277,7 @@ export function ItemActionButtons({
   const hidden = isHiddenStatus(item.status)
   const open = isOpenStatus(item.status)
   return (
-    <>
+    <IfCan request={{ inbox: ["triage"] }}>
       {hidden ? (
         <Button
           onClick={() =>
@@ -319,14 +319,14 @@ export function ItemActionButtons({
           <Archive /> Archive
         </Button>
       ) : null}
-    </>
+    </IfCan>
   )
 }
 
-/** Admins only: it edits the Low-value phrases list. */
+/** Needs filter access: it edits the Low-value phrases list. */
 function HideSimilarButton({ onClick, pending }: { onClick: () => void; pending: boolean }) {
-  const isAdmin = useIsAdmin()
-  if (!isAdmin) return null
+  const allowed = useCan({ filter: ["manage"], inbox: ["triage"] })
+  if (!allowed) return null
   return (
     <Button
       variant="ghost"
@@ -595,7 +595,7 @@ function AiDrafts({
     return () => clearTimeout(t)
   }, [pending, waiting])
 
-  if (item.isOwnAccount) return null
+  if (item.isOwnAccount || !item.ai.allowed) return null
 
   if (!item.ai.available) {
     return (
@@ -672,8 +672,8 @@ function AiDrafts({
 }
 
 function AiSettingsLink() {
-  const isAdmin = useIsAdmin()
-  if (!isAdmin) return <>Ask an owner or admin to set it up.</>
+  const canManage = useCan({ settings: ["manage"] })
+  if (!canManage) return <>Ask an owner or admin to set it up.</>
   return (
     <Link href="/settings?tab=ai" className="underline underline-offset-2 hover:text-foreground">
       Set it up

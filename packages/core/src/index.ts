@@ -1,4 +1,5 @@
 export * from "./roles"
+export * from "./permissions"
 export * from "./auth/allowlist"
 export * from "./settings/general"
 export * from "./settings/sections"

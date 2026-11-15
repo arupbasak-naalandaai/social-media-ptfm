@@ -18,13 +18,14 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useIsAdmin, useMe } from "./me-context"
+import { can } from "@inbox/core"
+import { useMe } from "./me-context"
 import { NAV_MAIN, NAV_MANAGE, type NavItem } from "./nav"
 import { UserMenu } from "./user-menu"
 
 function NavGroup({ label, items }: { label: string; items: NavItem[] }) {
-  // Groups with admin-only items wait for the role; the rest render in the static shell.
-  if (!items.some((i) => i.adminOnly)) return <NavGroupList label={label} items={items} />
+  // Groups with permission-gated items wait for the member's access; the rest render in the static shell.
+  if (!items.some((i) => i.permission)) return <NavGroupList label={label} items={items} />
   return (
     <Suspense fallback={<NavGroupSkeleton label={label} count={items.length} />}>
       <RoleFilteredNavGroup label={label} items={items} />
@@ -33,8 +34,8 @@ function NavGroup({ label, items }: { label: string; items: NavItem[] }) {
 }
 
 function RoleFilteredNavGroup({ label, items }: { label: string; items: NavItem[] }) {
-  const isAdmin = useIsAdmin()
-  const visible = items.filter((i) => !i.adminOnly || isAdmin)
+  const { permissions } = useMe()
+  const visible = items.filter((i) => !i.permission || can(permissions, i.permission))
   if (visible.length === 0) return null
   return <NavGroupList label={label} items={visible} />
 }

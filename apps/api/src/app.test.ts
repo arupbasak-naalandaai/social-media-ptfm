@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest"
+import { effectivePermissions } from "@inbox/core"
 import { Hono } from "hono"
 import { createLogger } from "@inbox/core/logger"
 import type { Role } from "@inbox/core"
 import { createApp } from "./app"
 import {
   requireAuth,
-  requireRole,
+  requirePermission,
   sessionMiddleware,
   type DevPreview,
   type OrgResolver,
@@ -28,7 +29,10 @@ function stubAuth(session: ResolvedSession | null): AuthLike {
 }
 
 function stubOrgs(role: Role | null): OrgResolver {
-  return { resolve: async (_u, id) => (role ? { id, name: "Acme", role } : null) }
+  return {
+    resolve: async (_u, id) =>
+      role ? { id, name: "Acme", role, permissions: effectivePermissions(role, null) } : null,
+  }
 }
 
 function app(
@@ -81,12 +85,14 @@ describe("api app", () => {
   it("GET /api/me → user, org, role", async () => {
     const res = await app(signedIn, "owner").request("/api/me")
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({
+    const body = (await res.json()) as { permissions: { platform: string[] } }
+    expect(body).toMatchObject({
       user: { id: "u1", email: "owner@example.com", name: "Owner", image: null },
       organization: { id: "org1", name: "Acme" },
       role: "owner",
       preview: false,
     })
+    expect(body.permissions.platform).toHaveLength(5)
   })
 
   it("sets x-request-id on responses", async () => {
@@ -95,11 +101,11 @@ describe("api app", () => {
   })
 })
 
-describe("requireRole", () => {
+describe("requirePermission", () => {
   function guarded(role: Role | null) {
     const h = new Hono<AppEnv>()
     h.use("*", sessionMiddleware(stubAuth(signedIn), stubOrgs(role)))
-    h.get("/admin", requireAuth, requireRole("admin"), (c) => c.text("ok"))
+    h.get("/admin", requireAuth, requirePermission({ settings: ["manage"] }), (c) => c.text("ok"))
     h.onError((err, c) => c.text(err.message, (err as { status?: 403 }).status ?? 500))
     return h
   }

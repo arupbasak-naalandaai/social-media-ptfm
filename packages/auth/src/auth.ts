@@ -4,6 +4,7 @@ import { APIError } from "better-auth/api"
 import { oneTap, organization } from "better-auth/plugins"
 import type { PrismaClient } from "@inbox/db"
 import type { Logger } from "@inbox/core/logger"
+import { ac, roles } from "@inbox/core"
 import { createAccessPolicy } from "./access"
 
 export interface AuthEnv {
@@ -57,6 +58,18 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv, logger?: Logger) 
         // Organizations are created by the bootstrap hook, not by users (MVP: single org).
         allowUserToCreateOrganization: false,
         creatorRole: "owner",
+        // Shared RBAC definition (packages/core/src/permissions.ts).
+        ac,
+        roles,
+        schema: {
+          member: {
+            additionalFields: {
+              // Per-member app-permission override (null = role defaults). Written only by
+              // our /api/members routes, so better-auth's endpoints can't set it.
+              permissions: { type: "json", required: false, input: false },
+            },
+          },
+        },
       }),
     ],
 

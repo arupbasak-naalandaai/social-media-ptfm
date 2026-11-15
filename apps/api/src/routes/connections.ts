@@ -5,7 +5,7 @@ import {
   ACCOUNT_KINDS,
   SYNC_STREAMS,
   connectionPatchSchema,
-  hasRole,
+  can,
   parseSectionSecrets,
   parseSectionValues,
   platformSchema,
@@ -37,7 +37,7 @@ import {
   v4LocationPath,
 } from "@inbox/pipeline"
 import { validate } from "../lib/validate"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission, visiblePlatforms } from "../middleware/session"
 import { googleRedirectUri, linkedinRedirectUri } from "./oauth"
 import type { AppEnv } from "../types"
 
@@ -195,13 +195,13 @@ export function connectionRoutes({
 
   return (
     new Hono<AppEnv>()
-      .use("*", requireAuth)
+      .use("*", requireAuth, requirePermission({ connection: ["read"] }))
 
       .get("/", async (c) => {
         const org = c.get("org")!
         const [rows, settings, meta, google, linkedin] = await Promise.all([
           prisma.platformAccount.findMany({
-            where: { organizationId: org.id },
+            where: { organizationId: org.id, platform: { in: visiblePlatforms(org) } },
             orderBy: [{ platform: "asc" }, { displayName: "asc" }],
             include: { syncStates: { orderBy: { stream: "asc" } } },
           }),
@@ -256,7 +256,7 @@ export function connectionRoutes({
               ? ("sign-in" as const)
               : null
         const googleConfigured = googleClient !== null
-        const isAdmin = hasRole(org.role, "admin")
+        const isAdmin = can(org.permissions, { connection: ["manage"] })
         const api = urls.apiPublicUrl
         const body: ConnectionsResponse = {
           accounts,
@@ -298,7 +298,7 @@ export function connectionRoutes({
 
       .patch(
         "/:id",
-        requireRole("admin"),
+        requirePermission({ connection: ["manage"] }),
         validate("param", idParam),
         validate("json", connectionPatchSchema),
         async (c) => {
@@ -306,7 +306,7 @@ export function connectionRoutes({
           const { id } = c.req.valid("param")
           const { included } = c.req.valid("json")
           const { count } = await prisma.platformAccount.updateMany({
-            where: { id, organizationId: org.id },
+            where: { id, organizationId: org.id, platform: { in: visiblePlatforms(org) } },
             data: { included },
           })
           if (count === 0) throw new HTTPException(404, { message: "Connection not found" })
@@ -321,60 +321,70 @@ export function connectionRoutes({
       )
 
       // Checks the stored token works (refreshing it if needed) with one cheap read.
-      .post("/:id/test", requireRole("admin"), validate("param", idParam), async (c) => {
-        const org = c.get("org")!
-        const { id } = c.req.valid("param")
-        const account = await prisma.platformAccount.findFirst({
-          where: { id, organizationId: org.id },
-        })
-        if (!account) throw new HTTPException(404, { message: "Connection not found" })
-        if (isDemoAccount(account))
-          return c.json({ ok: true, message: "Demo account: nothing to test." })
-        try {
-          const message = await testAccount(prisma, keyring, account)
-          if (account.status === "error") {
-            await prisma.platformAccount.update({
-              where: { id },
-              data: { status: "connected", lastError: null },
+      .post(
+        "/:id/test",
+        requirePermission({ connection: ["manage"] }),
+        validate("param", idParam),
+        async (c) => {
+          const org = c.get("org")!
+          const { id } = c.req.valid("param")
+          const account = await prisma.platformAccount.findFirst({
+            where: { id, organizationId: org.id, platform: { in: visiblePlatforms(org) } },
+          })
+          if (!account) throw new HTTPException(404, { message: "Connection not found" })
+          if (isDemoAccount(account))
+            return c.json({ ok: true, message: "Demo account: nothing to test." })
+          try {
+            const message = await testAccount(prisma, keyring, account)
+            if (account.status === "error") {
+              await prisma.platformAccount.update({
+                where: { id },
+                data: { status: "connected", lastError: null },
+              })
+            }
+            return c.json({ ok: true, message })
+          } catch (err) {
+            if (err instanceof HTTPException) throw err
+            const message = err instanceof Error ? err.message : String(err)
+            return c.json({ ok: false, message }, 200)
+          } finally {
+            await notifyInbox(prisma, {
+              type: "sync.changed",
+              organizationId: org.id,
+              syncStateIds: [],
             })
           }
-          return c.json({ ok: true, message })
-        } catch (err) {
-          if (err instanceof HTTPException) throw err
-          const message = err instanceof Error ? err.message : String(err)
-          return c.json({ ok: false, message }, 200)
-        } finally {
+        },
+      )
+
+      // Stops syncing and forgets the tokens. The platform grant itself isn't revoked (other
+      // locations/Pages from the same sign-in keep working); remove it in the platform's settings.
+      .post(
+        "/:id/disconnect",
+        requirePermission({ connection: ["manage"] }),
+        validate("param", idParam),
+        async (c) => {
+          const org = c.get("org")!
+          const { id } = c.req.valid("param")
+          const { count } = await prisma.platformAccount.updateMany({
+            where: { id, organizationId: org.id, platform: { in: visiblePlatforms(org) } },
+            data: {
+              status: "disconnected",
+              accessTokenEnc: null,
+              refreshTokenEnc: null,
+              tokenExpiresAt: null,
+              lastError: null,
+            },
+          })
+          if (count === 0) throw new HTTPException(404, { message: "Connection not found" })
+          await audit(org.id, c.get("user")!.id, "connection.disconnect", id)
           await notifyInbox(prisma, {
             type: "sync.changed",
             organizationId: org.id,
             syncStateIds: [],
           })
-        }
-      })
-
-      // Stops syncing and forgets the tokens. The platform grant itself isn't revoked (other
-      // locations/Pages from the same sign-in keep working); remove it in the platform's settings.
-      .post("/:id/disconnect", requireRole("admin"), validate("param", idParam), async (c) => {
-        const org = c.get("org")!
-        const { id } = c.req.valid("param")
-        const { count } = await prisma.platformAccount.updateMany({
-          where: { id, organizationId: org.id },
-          data: {
-            status: "disconnected",
-            accessTokenEnc: null,
-            refreshTokenEnc: null,
-            tokenExpiresAt: null,
-            lastError: null,
-          },
-        })
-        if (count === 0) throw new HTTPException(404, { message: "Connection not found" })
-        await audit(org.id, c.get("user")!.id, "connection.disconnect", id)
-        await notifyInbox(prisma, {
-          type: "sync.changed",
-          organizationId: org.id,
-          syncStateIds: [],
-        })
-        return c.json({ ok: true })
-      })
+          return c.json({ ok: true })
+        },
+      )
   )
 }

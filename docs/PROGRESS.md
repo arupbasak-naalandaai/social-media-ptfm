@@ -361,3 +361,13 @@ Requested after Phase 2: a separate section for people you already interacted wi
 | 2026-11-13 | Pub/Sub pushes only trigger a reconcile poll (payload undocumented); demo accounts can "send" replies (nothing posted)                                    |
 | 2026-11-13 | Instagram via Facebook Login (linked IG accounts, Page token) instead of Unified Login; Meta + YouTube redirect URIs on the web domain                    |
 | 2026-11-13 | Meta webhook dedupe = SHA-256 of the raw body; polls and webhooks share one ingest path; `simulate:webhook` dev script for local checks                   |
+
+## RBAC: roles + per-member access (2026-11-15)
+
+- **One definition, shared by better-auth and our API:** `packages/core/src/permissions.ts` builds statements with `createAccessControl` (better-auth's org statements + app resources `platform`, `inbox`, `ai`, `filter`, `connection`, `activity`, `settings`) and the `owner` / `admin` / `member` roles. They're passed to `organization({ ac, roles })` on the server and `organizationClient({ ac, roles })` in the web client.
+- **Custom access per member:** `member.permissions` (JSONB, migration `member_permissions`, declared as a better-auth `additionalField` with `input: false`). `null` = role defaults. When set, it replaces the role's app permissions (e.g. Facebook-only, no AI drafts, view-only). Member management always comes from the role. Owners can't be restricted.
+- **Enforcement (API):** `requirePermission({...})` replaces `requireRole`. Items, counts, follow-ups, connections, sync schedules and webhook deliveries are filtered to the member's platforms; out-of-scope items return 404. Without `ai:draft`, drafts are hidden, never auto-generated on open, and can't be requested or sent as a draft.
+- **Guards on `/api/members`:** nobody edits an owner or themselves; a non-owner can only grant what they hold; removing a member signs them out and takes their exact email off the sign-in allowlist (it warns if their domain still matches).
+- **UI:** new **Manage → Members** page (role + custom access editor); nav, inbox actions, reply box, platform filter, restore-with-allowlist and the Connections page all follow permissions. The API re-checks every request, so changes apply on the member's next click.
+- **Tests:** core permission unit tests; API integration tests for platform scoping, AI access and the members endpoints.
+- **Not done:** pre-setting access before someone's first sign-in (new members join with Member defaults); better-auth's dynamic (per-org custom) roles.

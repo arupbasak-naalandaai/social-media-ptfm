@@ -1,4 +1,4 @@
-import type { Role } from "@inbox/core"
+import type { PermissionMap, Role } from "@inbox/core"
 import type { Logger } from "@inbox/core/logger"
 
 export interface SessionUser {
@@ -23,6 +23,8 @@ export interface OrgContext {
   id: string
   name: string
   role: Role
+  /** Effective permissions: role defaults, or the member's custom access. */
+  permissions: PermissionMap
 }
 
 export type AppEnv = {

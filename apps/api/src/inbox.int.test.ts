@@ -4,6 +4,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import {
+  effectivePermissions,
   DEFAULT_RULES,
   type FilterRuleInput,
   type FollowUpListResponse,
@@ -13,6 +14,7 @@ import {
   type NormalizedItem,
   type RuleWithStats,
   type Role,
+  type AppPermissionMap,
 } from "@inbox/core"
 import { createLogger } from "@inbox/core/logger"
 import { createPrismaClient, type Prisma } from "@inbox/db"
@@ -37,7 +39,7 @@ const inlineJobs: JobSender = {
   stop: async () => {},
 }
 
-function app(role: Role = "owner") {
+function app(role: Role = "owner", custom: AppPermissionMap | null = null) {
   return createApp({
     auth: {
       handler: async () => new Response(null, { status: 404 }),
@@ -46,7 +48,14 @@ function app(role: Role = "owner") {
         session: { id: "s-int", activeOrganizationId: ORG },
       }),
     },
-    orgs: { resolve: async () => ({ id: ORG, name: "Int", role }) },
+    orgs: {
+      resolve: async () => ({
+        id: ORG,
+        name: "Int",
+        role,
+        permissions: effectivePermissions(role, custom),
+      }),
+    },
     logger,
     checkDb: async () => true,
     prisma: prisma!,
@@ -262,6 +271,49 @@ describe.skipIf(!url)("inbox + filters API (integration)", () => {
     expect((await app("member").request("/api/filters")).status).toBe(200)
     const res = await app("member").request("/api/filters/apply", { method: "POST" })
     expect(res.status).toBe(403)
+  })
+
+  it("custom access limits a member to their platforms and actions", async () => {
+    const fbOnly = app("member", { platform: ["facebook"], inbox: ["read"] })
+    const list = await json<ItemListResponse>(await fbOnly.request("/api/items"))
+    expect(list.items.length).toBeGreaterThan(0)
+    expect(new Set(list.items.map((i) => i.platform))).toEqual(new Set(["facebook"]))
+
+    // Asking for another platform returns nothing rather than leaking it.
+    const ig = await json<ItemListResponse>(await fbOnly.request("/api/items?platform=instagram"))
+    expect(ig.items).toHaveLength(0)
+
+    const other = await prisma!.item.findFirstOrThrow({
+      where: { organizationId: ORG, platform: "instagram" },
+    })
+    expect((await fbOnly.request(`/api/items/${other.id}`)).status).toBe(404)
+
+    const fb = list.items[0]!
+    expect((await fbOnly.request(`/api/items/${fb.id}`)).status).toBe(200)
+    // Read-only: no triage, no replies.
+    expect((await fbOnly.request(`/api/items/${fb.id}/resolve`, { method: "POST" })).status).toBe(
+      403,
+    )
+    const reply = await fbOnly.request(`/api/items/${fb.id}/reply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "Thanks!" }),
+    })
+    expect(reply.status).toBe(403)
+
+    // Without AI access: drafts are hidden and can't be requested.
+    const detail = await json<ItemDetail>(await fbOnly.request(`/api/items/${fb.id}`))
+    expect(detail.ai).toMatchObject({ allowed: false, available: false })
+    expect(detail.aiDrafts).toEqual([])
+    const noAi = app("member", { platform: ["facebook"], inbox: ["read", "reply"] })
+    expect((await noAi.request(`/api/items/${fb.id}/drafts`, { method: "POST" })).status).toBe(403)
+    const withAi = app("member", { platform: ["facebook"], inbox: ["read"], ai: ["draft"] })
+    const aiDetail = await json<ItemDetail>(await withAi.request(`/api/items/${fb.id}`))
+    expect(aiDetail.ai.allowed).toBe(true)
+
+    // No inbox access at all.
+    const none = app("member", { platform: ["facebook"] })
+    expect((await none.request("/api/items")).status).toBe(403)
   })
 
   it("restores a filtered item and optionally allowlists the author", async () => {

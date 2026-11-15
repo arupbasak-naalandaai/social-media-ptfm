@@ -2,12 +2,14 @@
 
 import { createAuthClient } from "better-auth/react"
 import { oneTapClient, organizationClient } from "better-auth/client/plugins"
+import { ac, roles } from "@inbox/core"
 import { publicEnv } from "./env"
 
 // Same-origin: requests go to /api/auth/* on the web domain and are proxied to the api.
 export const authClient = createAuthClient({
   plugins: [
-    organizationClient(),
+    // Same RBAC definition as the server (packages/core/src/permissions.ts).
+    organizationClient({ ac, roles }),
     ...(publicEnv.googleClientId
       ? [
           oneTapClient({

@@ -16,7 +16,7 @@ import type { PrismaClient } from "@inbox/db"
 import { claimSyncState, isSchedulable, notifyInbox } from "@inbox/pipeline"
 import type { JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission, visiblePlatforms } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface SyncRouteDeps {
@@ -33,14 +33,17 @@ function isDemo(meta: unknown): boolean {
 /** GET /api/sync (status of every schedule), POST /api/sync/:id/run ("Run now"). */
 export function syncRoutes({ prisma, jobs }: SyncRouteDeps) {
   return new Hono<AppEnv>()
-    .use("*", requireAuth)
+    .use("*", requireAuth, requirePermission({ connection: ["read"] }))
 
     .get("/", async (c) => {
       const org = c.get("org")!
       const [settings, rows] = await Promise.all([
         prisma.settings.findUnique({ where: { organizationId: org.id }, select: { sync: true } }),
         prisma.syncState.findMany({
-          where: { organizationId: org.id },
+          where: {
+            organizationId: org.id,
+            platformAccount: { platform: { in: visiblePlatforms(org) } },
+          },
           include: {
             platformAccount: {
               select: {
@@ -118,13 +121,17 @@ export function syncRoutes({ prisma, jobs }: SyncRouteDeps) {
 
     .post(
       "/:id/run",
-      requireRole("admin"),
+      requirePermission({ connection: ["manage"] }),
       validate("param", z.object({ id: z.string().min(1) })),
       async (c) => {
         const org = c.get("org")!
         const { id } = c.req.valid("param")
         const state = await prisma.syncState.findFirst({
-          where: { id, organizationId: org.id },
+          where: {
+            id,
+            organizationId: org.id,
+            platformAccount: { platform: { in: visiblePlatforms(org) } },
+          },
           include: { platformAccount: { select: { status: true, meta: true } } },
         })
         if (!state) throw new HTTPException(404, { message: "Sync schedule not found" })

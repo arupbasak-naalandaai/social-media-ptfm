@@ -13,6 +13,7 @@ import { filterRoutes } from "./routes/filters"
 import { itemRoutes } from "./routes/items"
 import { listRoutes } from "./routes/lists"
 import { meRoutes } from "./routes/me"
+import { memberRoutes } from "./routes/members"
 import { settingsRoutes } from "./routes/settings"
 import { connectionRoutes } from "./routes/connections"
 import { GOOGLE_CALLBACK_PATH, isGoogleConnectState, oauthRoutes } from "./routes/oauth"
@@ -89,6 +90,7 @@ export function createApp(deps: AppDeps) {
   app.route("/api/me", meRoutes)
   if (deps.prisma && deps.jobs) {
     app.route("/api/items", itemRoutes({ prisma: deps.prisma, jobs: deps.jobs }))
+    app.route("/api/members", memberRoutes({ prisma: deps.prisma }))
     app.route("/api/filters", filterRoutes({ prisma: deps.prisma, jobs: deps.jobs }))
     app.route("/api/lists", listRoutes({ prisma: deps.prisma, jobs: deps.jobs }))
     app.route("/api/sync", syncRoutes({ prisma: deps.prisma, jobs: deps.jobs }))

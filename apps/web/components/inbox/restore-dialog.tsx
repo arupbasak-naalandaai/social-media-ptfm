@@ -1,5 +1,6 @@
 "use client"
 
+import { IfCan } from "@/components/app/me-context"
 import { useState } from "react"
 import {
   AlertDialog,
@@ -54,17 +55,19 @@ export function RestoreDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {canAllowlist ? (
-          <div className="flex items-start gap-2">
-            <Checkbox
-              id="restore-allowlist"
-              checked={allowlist}
-              onCheckedChange={(v) => setAllowlist(v === true)}
-            />
-            <Label htmlFor="restore-allowlist" className="leading-snug font-normal">
-              Also add {author ?? "this author"} to the allowlist, so future items from them always
-              show at high priority
-            </Label>
-          </div>
+          <IfCan request={{ filter: ["manage"] }}>
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="restore-allowlist"
+                checked={allowlist}
+                onCheckedChange={(v) => setAllowlist(v === true)}
+              />
+              <Label htmlFor="restore-allowlist" className="leading-snug font-normal">
+                Also add {author ?? "this author"} to the allowlist, so future items from them
+                always show at high priority
+              </Label>
+            </div>
+          </IfCan>
         ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

@@ -21,6 +21,8 @@ import {
   type Priority,
 } from "./filters/types"
 import type { ItemLink } from "./links"
+import { appPermissionMapSchema, type AppPermissionMap } from "./permissions"
+import type { Role } from "./roles"
 import type { SecretKey, SecretStatus, SettingsSection, SettingsValues } from "./settings/sections"
 import type { AccountKind, SyncMode, SyncStreamKey } from "./settings/sync"
 
@@ -173,7 +175,8 @@ export interface ItemDetail extends ItemSummary {
   /** Seeded demo account: replies go through the whole flow but nothing is posted. */
   demoAccount: boolean
   /** AI drafting for this workspace: ready, or why not (shown instead of drafts). */
-  ai: { available: boolean; message: string | null }
+  /** `allowed` is false when the member's access doesn't include AI drafts (then drafts are hidden). */
+  ai: { allowed: boolean; available: boolean; message: string | null }
 }
 
 export interface ThreadEntry {
@@ -557,3 +560,43 @@ export interface ConnectionsResponse {
 }
 
 export const connectionPatchSchema = z.object({ included: z.boolean() })
+
+// ─── Members & access ──────────────────────────────────────────────────────────
+
+export interface MemberDto {
+  id: string
+  userId: string
+  name: string
+  email: string
+  image: string | null
+  role: Role
+  /** True when the member has custom access instead of their role's defaults. */
+  custom: boolean
+  /** Effective app permissions (role defaults or the custom set). */
+  permissions: AppPermissionMap
+  joinedAt: string
+  isSelf: boolean
+}
+
+export interface MembersResponse {
+  members: MemberDto[]
+  /** Defaults for each assignable role, for the access editor. */
+  roleDefaults: Record<"admin" | "member", AppPermissionMap>
+  /** The signed-in member's own permissions: they can only grant within these. */
+  grantable: AppPermissionMap
+}
+
+export const memberUpdateSchema = z
+  .object({
+    role: z.enum(["admin", "member"]).optional(),
+    /** A custom permission set, or null to go back to the role's defaults. */
+    permissions: appPermissionMapSchema.nullable().optional(),
+  })
+  .refine((v) => v.role !== undefined || v.permissions !== undefined, "Nothing to update")
+export type MemberUpdate = z.input<typeof memberUpdateSchema>
+
+export interface MemberRemovedResponse {
+  removed: true
+  /** Their email domain is still on the sign-in allowlist, so they could sign in again. */
+  stillAllowedByDomain: boolean
+}

@@ -13,7 +13,7 @@ import { Prisma, type ListEntry, type PrismaClient } from "@inbox/db"
 import { notifyInbox } from "@inbox/pipeline"
 import { autoRefilterEnabled, type JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface ListRouteDeps {
@@ -72,7 +72,7 @@ export function listRoutes({ prisma, jobs }: ListRouteDeps) {
   }
 
   return new Hono<AppEnv>()
-    .use("*", requireAuth)
+    .use("*", requireAuth, requirePermission({ filter: ["read"] }))
 
     .get("/", async (c) => {
       const org = c.get("org")!
@@ -83,39 +83,44 @@ export function listRoutes({ prisma, jobs }: ListRouteDeps) {
       return c.json({ entries: rows.map(toDto) })
     })
 
-    .post("/", requireRole("admin"), validate("json", createListEntrySchema), async (c) => {
-      const org = c.get("org")!
-      const body = c.req.valid("json")
-      if (!LIST_KINDS_BY_LIST[body.list].includes(body.kind)) {
-        throw new HTTPException(400, {
-          message: `The ${body.list} list doesn't take ${body.kind} entries`,
-        })
-      }
-      try {
-        const row = await prisma.listEntry.create({
-          data: {
-            organizationId: org.id,
-            list: body.list,
-            kind: body.kind,
-            value: normalizeValue(body.kind, body.value),
-            platform: body.platform,
-            note: body.note ?? null,
-            createdById: c.get("user")!.id,
-          },
-        })
-        await changed(org.id, c.get("user")!.id, c.get("requestId"), "list_entry.create", row)
-        return c.json(toDto(row), 201)
-      } catch (err) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-          throw new HTTPException(409, { message: "That entry is already on the list" })
+    .post(
+      "/",
+      requirePermission({ filter: ["manage"] }),
+      validate("json", createListEntrySchema),
+      async (c) => {
+        const org = c.get("org")!
+        const body = c.req.valid("json")
+        if (!LIST_KINDS_BY_LIST[body.list].includes(body.kind)) {
+          throw new HTTPException(400, {
+            message: `The ${body.list} list doesn't take ${body.kind} entries`,
+          })
         }
-        throw err
-      }
-    })
+        try {
+          const row = await prisma.listEntry.create({
+            data: {
+              organizationId: org.id,
+              list: body.list,
+              kind: body.kind,
+              value: normalizeValue(body.kind, body.value),
+              platform: body.platform,
+              note: body.note ?? null,
+              createdById: c.get("user")!.id,
+            },
+          })
+          await changed(org.id, c.get("user")!.id, c.get("requestId"), "list_entry.create", row)
+          return c.json(toDto(row), 201)
+        } catch (err) {
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+            throw new HTTPException(409, { message: "That entry is already on the list" })
+          }
+          throw err
+        }
+      },
+    )
 
     .delete(
       "/:id",
-      requireRole("admin"),
+      requirePermission({ filter: ["manage"] }),
       validate("param", z.object({ id: z.string().min(1) })),
       async (c) => {
         const org = c.get("org")!

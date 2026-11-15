@@ -5,7 +5,8 @@ import { Lock } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
 import { EmptyState } from "./empty-state"
-import { useIsAdmin } from "./me-context"
+import { can } from "@inbox/core"
+import { useMe } from "./me-context"
 import { ALL_NAV } from "./nav"
 
 /** Phase 1 shell: every section renders its empty state until its phase lands. */
@@ -18,15 +19,15 @@ export function PlaceholderPage({ href }: { href: string }) {
 }
 
 function PlaceholderContent({ href }: { href: string }) {
-  const isAdmin = useIsAdmin()
+  const { permissions } = useMe()
   const item = ALL_NAV.find((n) => n.href === href)
   if (!item) return null
 
-  if (item.adminOnly && !isAdmin) {
+  if (item.permission && !can(permissions, item.permission)) {
     return (
       <EmptyState
         icon={Lock}
-        title="Owners and admins only"
+        title="You don’t have access"
         description={`Ask an owner or admin if you need to change ${item.title.toLowerCase()}.`}
       />
     )

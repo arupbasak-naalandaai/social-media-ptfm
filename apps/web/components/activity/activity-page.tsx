@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { EmptyState } from "@/components/app/empty-state"
-import { useIsAdmin } from "@/components/app/me-context"
+import { useCan } from "@/components/app/me-context"
 import { SimpleSelect } from "@/components/filters/simple-select"
 import { absoluteTime, relativeTime } from "@/lib/format"
 import { cn } from "cn"
@@ -52,7 +52,7 @@ function ActivityContent() {
   const params = useSearchParams()
   const raw = params.get("tab")
   const tab: Tab = TABS.includes(raw as Tab) ? (raw as Tab) : "audit"
-  const isAdmin = useIsAdmin()
+  const canReplay = useCan({ activity: ["replay"] })
 
   return (
     <Tabs
@@ -78,7 +78,7 @@ function ActivityContent() {
         <JobsTab />
       </TabsContent>
       <TabsContent value="webhooks">
-        <WebhooksTab canReplay={isAdmin} />
+        <WebhooksTab canReplay={canReplay} />
       </TabsContent>
     </Tabs>
   )

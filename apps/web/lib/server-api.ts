@@ -2,6 +2,7 @@ import "server-only"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import { cacheLife } from "next/cache"
+import type { PermissionMap } from "@inbox/core"
 
 const API = (process.env.API_INTERNAL_URL ?? "http://localhost:3001").replace(/\/+$/, "")
 
@@ -9,6 +10,8 @@ export interface Me {
   user: { id: string; email: string; name: string; image: string | null }
   organization: { id: string; name: string }
   role: "owner" | "admin" | "member"
+  /** Effective permissions (role defaults or custom access). The api re-checks every request. */
+  permissions: PermissionMap
   /** True when the api is running with DEV_AUTH_BYPASS and there is no real session. */
   preview: boolean
 }

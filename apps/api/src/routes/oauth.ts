@@ -55,7 +55,7 @@ import {
   subscribePage,
   YoutubeApiError,
 } from "@inbox/pipeline"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface OAuthRouteDeps {
@@ -209,370 +209,383 @@ export function oauthRoutes({ prisma, keyring, urls, logger }: OAuthRouteDeps) {
     )
   }
 
-  return new Hono<AppEnv>()
-    .use("*", requireAuth, requireRole("admin"))
+  return (
+    new Hono<AppEnv>()
+      .use("*", requireAuth, requirePermission({ connection: ["manage"] }))
 
-    .get("/google/start", (c) => startGoogle(c, "google_business"))
-    .get("/youtube/start", (c) => startGoogle(c, "youtube"))
+      .get("/google/start", requirePermission({ platform: ["google_business"] }), (c) =>
+        startGoogle(c, "google_business"),
+      )
+      .get("/youtube/start", requirePermission({ platform: ["youtube"] }), (c) =>
+        startGoogle(c, "youtube"),
+      )
 
-    .get("/google/callback", async (c) => {
-      const org = c.get("org")!
-      const q = c.req.query()
-      if (q.error) {
-        return c.redirect(
-          back({
-            error:
-              q.error === "access_denied"
-                ? "Google access wasn't granted."
-                : `Google said: ${q.error}`,
-          }),
-        )
-      }
-      const pending = await consumeState(c, "google")
-      if (!pending?.verifier || !q.code) {
-        return c.redirect(
-          back({ error: "That sign-in link expired or was already used. Try Connect again." }),
-        )
-      }
-      const product = pending.product ?? "google_business"
-
-      try {
-        const client = await loadGoogleClient(prisma, keyring, org.id)
-        if (!client) throw new Error("The Google OAuth client was removed from Settings")
-        const token = await exchangeGoogleCode(client, {
-          code: q.code,
-          redirectUri: redirect.google,
-          codeVerifier: pending.verifier,
-        })
-        const scope = product === "youtube" ? YOUTUBE_SCOPE : GBP_SCOPE
-        if (token.scope && !token.scope.split(" ").includes(scope)) {
-          return c.redirect(
-            back({
-              error: `${product === "youtube" ? "YouTube" : "Google Business Profile"} access wasn't granted. Tick it on the consent screen.`,
-            }),
-          )
-        }
-        if (!token.refresh_token) {
+      .get("/google/callback", async (c) => {
+        const org = c.get("org")!
+        const q = c.req.query()
+        if (q.error) {
           return c.redirect(
             back({
               error:
-                "Google didn't return a refresh token. Remove the app's access in your Google account, then connect again.",
+                q.error === "access_denied"
+                  ? "Google access wasn't granted."
+                  : `Google said: ${q.error}`,
             }),
           )
         }
-        return product === "youtube" ? await connectYoutube(c, token) : await connectGbp(c, token)
-      } catch (err) {
-        logger.warn({ err: (err as Error).message, product }, "google connect failed")
-        const message =
-          err instanceof GoogleApiError || err instanceof YoutubeApiError
-            ? err.message
-            : "Connecting Google failed. Try again."
-        return c.redirect(back({ error: message }))
-      }
-    })
-
-    .get("/meta/start", async (c) => {
-      const org = c.get("org")!
-      const app = await loadMetaApp(prisma, keyring, org.id)
-      if (!app) {
-        return c.redirect(
-          back({ error: "Add the Meta app ID and app secret in Settings → Connections first." }),
-        )
-      }
-      const state = await createState("meta", {
-        organizationId: org.id,
-        userId: c.get("user")!.id,
-        product: "meta",
-      })
-      return c.redirect(metaAuthUrl(app, { redirectUri: redirect.meta, state }))
-    })
-
-    .get("/meta/callback", async (c) => {
-      const org = c.get("org")!
-      const q = c.req.query()
-      if (q.error) {
-        return c.redirect(
-          back({
-            error:
-              q.error_reason === "user_denied" || q.error === "access_denied"
-                ? "Facebook access wasn't granted."
-                : `Facebook said: ${q.error_description ?? q.error}`,
-          }),
-        )
-      }
-      const pending = await consumeState(c, "meta")
-      if (!pending || !q.code) {
-        return c.redirect(
-          back({ error: "That sign-in link expired or was already used. Try Connect again." }),
-        )
-      }
-      try {
-        const app = await loadMetaApp(prisma, keyring, org.id)
-        if (!app) throw new Error("The Meta app was removed from Settings")
-        const userToken = await exchangeMetaCode(app, { code: q.code, redirectUri: redirect.meta })
-        const warnings: string[] = []
-        const declined = await declinedMetaPermissions(app, userToken.access_token).catch(() => [])
-        if (declined.length) {
-          warnings.push(
-            `Not granted: ${declined.join(", ")}. Some comments, DMs or replies won't work until you reconnect and allow them.`,
+        const pending = await consumeState(c, "google")
+        if (!pending?.verifier || !q.code) {
+          return c.redirect(
+            back({ error: "That sign-in link expired or was already used. Try Connect again." }),
           )
         }
+        const product = pending.product ?? "google_business"
 
-        const pages = await listManagedPages(app, userToken.access_token)
-        let fb = 0
-        let ig = 0
-        for (const page of pages) {
-          if (!page.access_token) {
-            warnings.push(`${page.name}: no Page token (you need a task on this Page).`)
-            continue
-          }
-          const pageKey = { platform: "facebook", externalId: page.id }
-          const pageMeta = {
-            ...(page.link ? { link: page.link } : {}),
-            ...(page.category ? { category: page.category } : {}),
-          } satisfies Prisma.InputJsonObject
-          const pageRow = await prisma.platformAccount.upsert({
-            where: {
-              organizationId_platform_externalId: {
-                organizationId: org.id,
-                platform: "facebook",
-                externalId: page.id,
-              },
-            },
-            create: {
-              organizationId: org.id,
-              platform: "facebook",
-              kind: "fb_page",
-              externalId: page.id,
-              displayName: page.name,
-              avatarUrl: page.picture?.data.url ?? null,
-              meta: pageMeta,
-              status: "connected",
-              scopes: [],
-              ...encryptMetaToken(keyring, org.id, pageKey, page.access_token),
-            },
-            update: {
-              displayName: page.name,
-              avatarUrl: page.picture?.data.url ?? null,
-              meta: pageMeta,
-              status: "connected",
-              lastError: null,
-              lastErrorAt: null,
-              ...encryptMetaToken(keyring, org.id, pageKey, page.access_token),
-            },
+        try {
+          const client = await loadGoogleClient(prisma, keyring, org.id)
+          if (!client) throw new Error("The Google OAuth client was removed from Settings")
+          const token = await exchangeGoogleCode(client, {
+            code: q.code,
+            redirectUri: redirect.google,
+            codeVerifier: pending.verifier,
           })
-          fb++
-          try {
-            await subscribePage(app, page.id, page.access_token)
-          } catch (err) {
-            warnings.push(`Webhooks for ${page.name}: ${(err as Error).message}`)
+          const scope = product === "youtube" ? YOUTUBE_SCOPE : GBP_SCOPE
+          if (token.scope && !token.scope.split(" ").includes(scope)) {
+            return c.redirect(
+              back({
+                error: `${product === "youtube" ? "YouTube" : "Google Business Profile"} access wasn't granted. Tick it on the consent screen.`,
+              }),
+            )
+          }
+          if (!token.refresh_token) {
+            return c.redirect(
+              back({
+                error:
+                  "Google didn't return a refresh token. Remove the app's access in your Google account, then connect again.",
+              }),
+            )
+          }
+          return product === "youtube" ? await connectYoutube(c, token) : await connectGbp(c, token)
+        } catch (err) {
+          logger.warn({ err: (err as Error).message, product }, "google connect failed")
+          const message =
+            err instanceof GoogleApiError || err instanceof YoutubeApiError
+              ? err.message
+              : "Connecting Google failed. Try again."
+          return c.redirect(back({ error: message }))
+        }
+      })
+
+      // A Meta sign-in brings in both Facebook Pages and their Instagram accounts.
+      .get("/meta/start", requirePermission({ platform: ["facebook", "instagram"] }), async (c) => {
+        const org = c.get("org")!
+        const app = await loadMetaApp(prisma, keyring, org.id)
+        if (!app) {
+          return c.redirect(
+            back({ error: "Add the Meta app ID and app secret in Settings → Connections first." }),
+          )
+        }
+        const state = await createState("meta", {
+          organizationId: org.id,
+          userId: c.get("user")!.id,
+          product: "meta",
+        })
+        return c.redirect(metaAuthUrl(app, { redirectUri: redirect.meta, state }))
+      })
+
+      .get("/meta/callback", async (c) => {
+        const org = c.get("org")!
+        const q = c.req.query()
+        if (q.error) {
+          return c.redirect(
+            back({
+              error:
+                q.error_reason === "user_denied" || q.error === "access_denied"
+                  ? "Facebook access wasn't granted."
+                  : `Facebook said: ${q.error_description ?? q.error}`,
+            }),
+          )
+        }
+        const pending = await consumeState(c, "meta")
+        if (!pending || !q.code) {
+          return c.redirect(
+            back({ error: "That sign-in link expired or was already used. Try Connect again." }),
+          )
+        }
+        try {
+          const app = await loadMetaApp(prisma, keyring, org.id)
+          if (!app) throw new Error("The Meta app was removed from Settings")
+          const userToken = await exchangeMetaCode(app, {
+            code: q.code,
+            redirectUri: redirect.meta,
+          })
+          const warnings: string[] = []
+          const declined = await declinedMetaPermissions(app, userToken.access_token).catch(
+            () => [],
+          )
+          if (declined.length) {
+            warnings.push(
+              `Not granted: ${declined.join(", ")}. Some comments, DMs or replies won't work until you reconnect and allow them.`,
+            )
           }
 
-          const igAccount = page.instagram_business_account
-          if (igAccount) {
-            const igKey = { platform: "instagram", externalId: igAccount.id }
-            const igMeta = {
-              pageId: page.id,
-              pageName: page.name,
-              ...(igAccount.username ? { username: igAccount.username } : {}),
+          const pages = await listManagedPages(app, userToken.access_token)
+          let fb = 0
+          let ig = 0
+          for (const page of pages) {
+            if (!page.access_token) {
+              warnings.push(`${page.name}: no Page token (you need a task on this Page).`)
+              continue
+            }
+            const pageKey = { platform: "facebook", externalId: page.id }
+            const pageMeta = {
+              ...(page.link ? { link: page.link } : {}),
+              ...(page.category ? { category: page.category } : {}),
             } satisfies Prisma.InputJsonObject
-            const name = igAccount.username
-              ? `@${igAccount.username}`
-              : (igAccount.name ?? igAccount.id)
-            await prisma.platformAccount.upsert({
+            const pageRow = await prisma.platformAccount.upsert({
               where: {
                 organizationId_platform_externalId: {
                   organizationId: org.id,
-                  platform: "instagram",
-                  externalId: igAccount.id,
+                  platform: "facebook",
+                  externalId: page.id,
                 },
               },
               create: {
                 organizationId: org.id,
-                platform: "instagram",
-                kind: "ig_account",
-                externalId: igAccount.id,
-                displayName: name,
-                avatarUrl: igAccount.profile_picture_url ?? null,
-                parentAccountId: pageRow.id,
-                meta: igMeta,
+                platform: "facebook",
+                kind: "fb_page",
+                externalId: page.id,
+                displayName: page.name,
+                avatarUrl: page.picture?.data.url ?? null,
+                meta: pageMeta,
                 status: "connected",
                 scopes: [],
-                ...encryptMetaToken(keyring, org.id, igKey, page.access_token),
+                ...encryptMetaToken(keyring, org.id, pageKey, page.access_token),
               },
               update: {
-                displayName: name,
-                avatarUrl: igAccount.profile_picture_url ?? null,
-                parentAccountId: pageRow.id,
-                meta: igMeta,
+                displayName: page.name,
+                avatarUrl: page.picture?.data.url ?? null,
+                meta: pageMeta,
                 status: "connected",
                 lastError: null,
                 lastErrorAt: null,
-                ...encryptMetaToken(keyring, org.id, igKey, page.access_token),
+                ...encryptMetaToken(keyring, org.id, pageKey, page.access_token),
               },
             })
-            ig++
-          }
-        }
-        if (fb === 0) {
-          warnings.push(
-            "No Facebook Pages came back. Pick your Pages (and their Instagram accounts) on the Facebook dialog.",
-          )
-        }
-        return await finish(c, {
-          platform: "meta",
-          connected: "meta",
-          count: fb + ig,
-          detail: { pages: fb, instagram: ig },
-          warnings,
-        })
-      } catch (err) {
-        logger.warn({ err: (err as Error).message }, "meta connect failed")
-        const message =
-          err instanceof MetaApiError ? err.message : "Connecting Facebook failed. Try again."
-        return c.redirect(back({ error: message }))
-      }
-    })
-
-    .get("/linkedin/start", async (c) => {
-      const org = c.get("org")!
-      const app = await loadLinkedinApp(prisma, keyring, org.id)
-      if (!app) {
-        return c.redirect(
-          back({
-            error: "Add the LinkedIn client ID and client secret in Settings → Connections first.",
-          }),
-        )
-      }
-      const state = await createState("linkedin", {
-        organizationId: org.id,
-        userId: c.get("user")!.id,
-        product: "linkedin",
-      })
-      return c.redirect(linkedinAuthUrl(app, { redirectUri: redirect.linkedin, state }))
-    })
-
-    .get("/linkedin/callback", async (c) => {
-      const org = c.get("org")!
-      const q = c.req.query()
-      if (q.error) {
-        return c.redirect(
-          back({
-            error:
-              q.error === "user_cancelled_login" || q.error === "user_cancelled_authorize"
-                ? "LinkedIn access wasn't granted."
-                : `LinkedIn said: ${q.error_description ?? q.error}`,
-          }),
-        )
-      }
-      const pending = await consumeState(c, "linkedin")
-      if (!pending || !q.code) {
-        return c.redirect(
-          back({ error: "That sign-in link expired or was already used. Try Connect again." }),
-        )
-      }
-      try {
-        const app = await loadLinkedinApp(prisma, keyring, org.id)
-        if (!app) throw new Error("The LinkedIn app was removed from Settings")
-        const token = await exchangeLinkedinCode(app, {
-          code: q.code,
-          redirectUri: redirect.linkedin,
-        })
-        const warnings: string[] = []
-        const missing = missingLinkedinScopes(token)
-        if (missing.length) {
-          warnings.push(
-            `Not granted: ${missing.join(", ")}. Comments or replies won't work until the app has Community Management API access and you reconnect.`,
-          )
-        }
-        if (!token.refresh_token) {
-          warnings.push(
-            "LinkedIn didn't issue a refresh token, so you'll need to reconnect before the token expires in about 60 days.",
-          )
-        }
-        const ctx = { token: token.access_token, version: app.version }
-        const { orgIds, personUrn } = await listAdministeredOrgs(ctx)
-        const webhookUrl = `${urls.apiPublicUrl}/webhooks/linkedin`
-        const canSubscribe =
-          Boolean(app.appId && personUrn) &&
-          /^https:\/\//.test(urls.apiPublicUrl) &&
-          !/localhost|127\.0\.0\.1/.test(urls.apiPublicUrl)
-
-        for (const id of orgIds) {
-          const o = await getLinkedinOrganization(ctx, id).catch(() => null)
-          const key = { platform: "linkedin", externalId: id }
-          const meta = {
-            ...(o?.vanityName ? { vanityName: o.vanityName } : {}),
-            link: linkedinPageUrl({ id, vanityName: o?.vanityName }),
-            ...(personUrn ? { connectedBy: personUrn } : {}),
-          } satisfies Prisma.InputJsonObject
-          const tokens = encryptLinkedinTokens(keyring, org.id, key, token)
-          const displayName = o?.localizedName ?? `LinkedIn Page ${id}`
-          await prisma.platformAccount.upsert({
-            where: {
-              organizationId_platform_externalId: {
-                organizationId: org.id,
-                platform: "linkedin",
-                externalId: id,
-              },
-            },
-            create: {
-              organizationId: org.id,
-              platform: "linkedin",
-              kind: "li_org",
-              externalId: id,
-              displayName,
-              meta,
-              status: "connected",
-              ...tokens,
-            },
-            update: {
-              displayName,
-              meta,
-              status: "connected",
-              lastError: null,
-              lastErrorAt: null,
-              ...tokens,
-            },
-          })
-          if (canSubscribe) {
+            fb++
             try {
-              await subscribeLinkedinWebhook(ctx, {
-                appId: app.appId,
-                personUrn: personUrn!,
-                orgUrn: `urn:li:organization:${id}`,
-                webhookUrl,
-              })
+              await subscribePage(app, page.id, page.access_token)
             } catch (err) {
-              warnings.push(`Webhook for ${displayName}: ${(err as Error).message}`)
+              warnings.push(`Webhooks for ${page.name}: ${(err as Error).message}`)
+            }
+
+            const igAccount = page.instagram_business_account
+            if (igAccount) {
+              const igKey = { platform: "instagram", externalId: igAccount.id }
+              const igMeta = {
+                pageId: page.id,
+                pageName: page.name,
+                ...(igAccount.username ? { username: igAccount.username } : {}),
+              } satisfies Prisma.InputJsonObject
+              const name = igAccount.username
+                ? `@${igAccount.username}`
+                : (igAccount.name ?? igAccount.id)
+              await prisma.platformAccount.upsert({
+                where: {
+                  organizationId_platform_externalId: {
+                    organizationId: org.id,
+                    platform: "instagram",
+                    externalId: igAccount.id,
+                  },
+                },
+                create: {
+                  organizationId: org.id,
+                  platform: "instagram",
+                  kind: "ig_account",
+                  externalId: igAccount.id,
+                  displayName: name,
+                  avatarUrl: igAccount.profile_picture_url ?? null,
+                  parentAccountId: pageRow.id,
+                  meta: igMeta,
+                  status: "connected",
+                  scopes: [],
+                  ...encryptMetaToken(keyring, org.id, igKey, page.access_token),
+                },
+                update: {
+                  displayName: name,
+                  avatarUrl: igAccount.profile_picture_url ?? null,
+                  parentAccountId: pageRow.id,
+                  meta: igMeta,
+                  status: "connected",
+                  lastError: null,
+                  lastErrorAt: null,
+                  ...encryptMetaToken(keyring, org.id, igKey, page.access_token),
+                },
+              })
+              ig++
             }
           }
+          if (fb === 0) {
+            warnings.push(
+              "No Facebook Pages came back. Pick your Pages (and their Instagram accounts) on the Facebook dialog.",
+            )
+          }
+          return await finish(c, {
+            platform: "meta",
+            connected: "meta",
+            count: fb + ig,
+            detail: { pages: fb, instagram: ig },
+            warnings,
+          })
+        } catch (err) {
+          logger.warn({ err: (err as Error).message }, "meta connect failed")
+          const message =
+            err instanceof MetaApiError ? err.message : "Connecting Facebook failed. Try again."
+          return c.redirect(back({ error: message }))
         }
-        if (orgIds.length === 0) {
-          warnings.push(
-            "This LinkedIn member isn't a super admin of any Company Page. Sign in as a Page admin.",
-          )
-        } else if (!canSubscribe) {
-          warnings.push(
-            app.appId
-              ? "No public HTTPS API URL, so comments arrive on the reconcile schedule."
-              : "No LinkedIn app ID in Settings → Connections, so webhooks aren't subscribed: comments arrive on the reconcile schedule.",
+      })
+
+      .get("/linkedin/start", requirePermission({ platform: ["linkedin"] }), async (c) => {
+        const org = c.get("org")!
+        const app = await loadLinkedinApp(prisma, keyring, org.id)
+        if (!app) {
+          return c.redirect(
+            back({
+              error:
+                "Add the LinkedIn client ID and client secret in Settings → Connections first.",
+            }),
           )
         }
-        return await finish(c, {
-          platform: "linkedin",
-          connected: "linkedin",
-          count: orgIds.length,
-          detail: { pages: orgIds.length, webhooks: canSubscribe },
-          warnings,
+        const state = await createState("linkedin", {
+          organizationId: org.id,
+          userId: c.get("user")!.id,
+          product: "linkedin",
         })
-      } catch (err) {
-        logger.warn({ err: (err as Error).message }, "linkedin connect failed")
-        const message =
-          err instanceof LinkedinApiError ? err.message : "Connecting LinkedIn failed. Try again."
-        return c.redirect(back({ error: message }))
-      }
-    })
+        return c.redirect(linkedinAuthUrl(app, { redirectUri: redirect.linkedin, state }))
+      })
+
+      .get("/linkedin/callback", async (c) => {
+        const org = c.get("org")!
+        const q = c.req.query()
+        if (q.error) {
+          return c.redirect(
+            back({
+              error:
+                q.error === "user_cancelled_login" || q.error === "user_cancelled_authorize"
+                  ? "LinkedIn access wasn't granted."
+                  : `LinkedIn said: ${q.error_description ?? q.error}`,
+            }),
+          )
+        }
+        const pending = await consumeState(c, "linkedin")
+        if (!pending || !q.code) {
+          return c.redirect(
+            back({ error: "That sign-in link expired or was already used. Try Connect again." }),
+          )
+        }
+        try {
+          const app = await loadLinkedinApp(prisma, keyring, org.id)
+          if (!app) throw new Error("The LinkedIn app was removed from Settings")
+          const token = await exchangeLinkedinCode(app, {
+            code: q.code,
+            redirectUri: redirect.linkedin,
+          })
+          const warnings: string[] = []
+          const missing = missingLinkedinScopes(token)
+          if (missing.length) {
+            warnings.push(
+              `Not granted: ${missing.join(", ")}. Comments or replies won't work until the app has Community Management API access and you reconnect.`,
+            )
+          }
+          if (!token.refresh_token) {
+            warnings.push(
+              "LinkedIn didn't issue a refresh token, so you'll need to reconnect before the token expires in about 60 days.",
+            )
+          }
+          const ctx = { token: token.access_token, version: app.version }
+          const { orgIds, personUrn } = await listAdministeredOrgs(ctx)
+          const webhookUrl = `${urls.apiPublicUrl}/webhooks/linkedin`
+          const canSubscribe =
+            Boolean(app.appId && personUrn) &&
+            /^https:\/\//.test(urls.apiPublicUrl) &&
+            !/localhost|127\.0\.0\.1/.test(urls.apiPublicUrl)
+
+          for (const id of orgIds) {
+            const o = await getLinkedinOrganization(ctx, id).catch(() => null)
+            const key = { platform: "linkedin", externalId: id }
+            const meta = {
+              ...(o?.vanityName ? { vanityName: o.vanityName } : {}),
+              link: linkedinPageUrl({ id, vanityName: o?.vanityName }),
+              ...(personUrn ? { connectedBy: personUrn } : {}),
+            } satisfies Prisma.InputJsonObject
+            const tokens = encryptLinkedinTokens(keyring, org.id, key, token)
+            const displayName = o?.localizedName ?? `LinkedIn Page ${id}`
+            await prisma.platformAccount.upsert({
+              where: {
+                organizationId_platform_externalId: {
+                  organizationId: org.id,
+                  platform: "linkedin",
+                  externalId: id,
+                },
+              },
+              create: {
+                organizationId: org.id,
+                platform: "linkedin",
+                kind: "li_org",
+                externalId: id,
+                displayName,
+                meta,
+                status: "connected",
+                ...tokens,
+              },
+              update: {
+                displayName,
+                meta,
+                status: "connected",
+                lastError: null,
+                lastErrorAt: null,
+                ...tokens,
+              },
+            })
+            if (canSubscribe) {
+              try {
+                await subscribeLinkedinWebhook(ctx, {
+                  appId: app.appId,
+                  personUrn: personUrn!,
+                  orgUrn: `urn:li:organization:${id}`,
+                  webhookUrl,
+                })
+              } catch (err) {
+                warnings.push(`Webhook for ${displayName}: ${(err as Error).message}`)
+              }
+            }
+          }
+          if (orgIds.length === 0) {
+            warnings.push(
+              "This LinkedIn member isn't a super admin of any Company Page. Sign in as a Page admin.",
+            )
+          } else if (!canSubscribe) {
+            warnings.push(
+              app.appId
+                ? "No public HTTPS API URL, so comments arrive on the reconcile schedule."
+                : "No LinkedIn app ID in Settings → Connections, so webhooks aren't subscribed: comments arrive on the reconcile schedule.",
+            )
+          }
+          return await finish(c, {
+            platform: "linkedin",
+            connected: "linkedin",
+            count: orgIds.length,
+            detail: { pages: orgIds.length, webhooks: canSubscribe },
+            warnings,
+          })
+        } catch (err) {
+          logger.warn({ err: (err as Error).message }, "linkedin connect failed")
+          const message =
+            err instanceof LinkedinApiError ? err.message : "Connecting LinkedIn failed. Try again."
+          return c.redirect(back({ error: message }))
+        }
+      })
+  )
 
   // ─── Google products ─────────────────────────────────────────────────────────
 

@@ -2,6 +2,7 @@
  * AI drafts API against a real database (TEST_DATABASE_URL): availability, regenerate,
  * drafting on open, and the key test's validation. No provider is called.
  */
+import { effectivePermissions } from "@inbox/core"
 import { randomBytes } from "node:crypto"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import type { AiDraftJobData, ItemDetail } from "@inbox/core"
@@ -37,7 +38,14 @@ const app = () =>
         session: { id: "s-d", activeOrganizationId: ORG },
       }),
     },
-    orgs: { resolve: async () => ({ id: ORG, name: "Drafts", role: "owner" }) },
+    orgs: {
+      resolve: async () => ({
+        id: ORG,
+        name: "Drafts",
+        role: "owner",
+        permissions: effectivePermissions("owner", null),
+      }),
+    },
     logger,
     checkDb: async () => true,
     prisma: prisma!,
@@ -112,6 +120,7 @@ describe.skipIf(!url)("AI drafts API (integration)", () => {
 
   it("explains why AI isn't available and refuses to draft", async () => {
     expect((await detail()).ai).toEqual({
+      allowed: true,
       available: false,
       message: "AI drafts are off (Settings → AI replies).",
     })
@@ -125,7 +134,7 @@ describe.skipIf(!url)("AI drafts API (integration)", () => {
   it("regenerates on request, even when a rule turned drafts off", async () => {
     await setAi(readyAi())
     await prisma!.item.update({ where: { id: itemId }, data: { aiDraftsAllowed: false } })
-    expect((await detail()).ai).toEqual({ available: true, message: null })
+    expect((await detail()).ai).toEqual({ allowed: true, available: true, message: null })
     expect((await regenerate()).status).toBe(202)
     expect(drafts).toEqual([expect.objectContaining({ itemId, force: true })])
     expect((await prisma!.item.findUniqueOrThrow({ where: { id: itemId } })).aiDraftsAllowed).toBe(

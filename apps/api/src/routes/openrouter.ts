@@ -20,7 +20,7 @@ import {
   pkcePair,
   settingsSecretAad,
 } from "@inbox/pipeline"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface OpenRouterRouteDeps {
@@ -90,7 +90,7 @@ export function openrouterRoutes({ prisma, keyring, urls, logger }: OpenRouterRo
   }
 
   return new Hono<AppEnv>()
-    .use("*", requireAuth, requireRole("admin"))
+    .use("*", requireAuth, requirePermission({ settings: ["manage"] }))
 
     .get("/start", async (c) => {
       const org = c.get("org")!

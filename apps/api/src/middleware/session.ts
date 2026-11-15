@@ -1,6 +1,16 @@
 import { createMiddleware } from "hono/factory"
 import { HTTPException } from "hono/http-exception"
-import { DEMO_ORG_METADATA, hasRole, parseMemberRole, type Role } from "@inbox/core"
+import {
+  DEMO_ORG_METADATA,
+  allowedPlatforms,
+  can,
+  effectivePermissions,
+  parseAppPermissions,
+  parseMemberRole,
+  type PermissionMap,
+  type Platform,
+  type Role,
+} from "@inbox/core"
 import type { PrismaClient } from "@inbox/db"
 import type { AppEnv, AuthLike, OrgContext } from "../types"
 
@@ -13,11 +23,20 @@ export function prismaOrgResolver(prisma: PrismaClient): OrgResolver {
     async resolve(userId, organizationId) {
       const member = await prisma.member.findFirst({
         where: { userId, organizationId },
-        select: { role: true, organization: { select: { id: true, name: true } } },
+        select: {
+          role: true,
+          permissions: true,
+          organization: { select: { id: true, name: true } },
+        },
       })
       const role = parseMemberRole(member?.role)
       if (!member || !role) return null
-      return { id: member.organization.id, name: member.organization.name, role }
+      return {
+        id: member.organization.id,
+        name: member.organization.name,
+        role,
+        permissions: effectivePermissions(role, parseAppPermissions(member.permissions)),
+      }
     },
   }
 }
@@ -68,7 +87,11 @@ export function sessionMiddleware(auth: AuthLike, orgs: OrgResolver, devPreview?
       const org = await devPreview.resolveOrg()
       c.set("user", { ...PREVIEW_USER })
       c.set("session", { id: "dev-preview-session", activeOrganizationId: org.id })
-      c.set("org", { ...org, role: devPreview.role })
+      c.set("org", {
+        ...org,
+        role: devPreview.role,
+        permissions: effectivePermissions(devPreview.role, null),
+      })
       c.set("preview", true)
       await next()
       return
@@ -89,12 +112,21 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   await next()
 })
 
-/** Use after requireAuth. Owner > admin > member. */
-export function requireRole(required: Role) {
+/**
+ * Use after requireAuth. Checks the member's effective permissions (role defaults or their
+ * custom access) with better-auth's access control.
+ */
+export function requirePermission(request: PermissionMap) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    if (!hasRole(c.get("org")?.role, required)) {
-      throw new HTTPException(403, { message: `Requires ${required} role` })
+    const org = c.get("org")
+    if (!org || !can(org.permissions, request)) {
+      throw new HTTPException(403, { message: "You don't have access to do that" })
     }
     await next()
   })
+}
+
+/** Platforms the current member may see (all of them for owners). */
+export function visiblePlatforms(org: { permissions: PermissionMap }): Platform[] {
+  return allowedPlatforms(org.permissions)
 }

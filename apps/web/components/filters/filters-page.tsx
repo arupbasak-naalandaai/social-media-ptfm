@@ -5,7 +5,7 @@ import { Info } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useIsAdmin } from "@/components/app/me-context"
+import { useCan } from "@/components/app/me-context"
 import { ListsPanel } from "./lists-panel"
 import { RulesList } from "./rules-list"
 
@@ -20,7 +20,7 @@ export function FiltersPage() {
 }
 
 function FiltersContent() {
-  const canEdit = useIsAdmin()
+  const canEdit = useCan({ filter: ["manage"] })
   const [tab, setTab] = useState<Tab>("rules")
 
   return (

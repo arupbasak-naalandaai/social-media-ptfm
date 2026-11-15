@@ -1,5 +1,6 @@
 "use client"
 
+import { IfCan } from "@/components/app/me-context"
 import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query"
 import { Fragment, useCallback, useState, type ReactNode } from "react"
 import Link from "next/link"
@@ -291,15 +292,24 @@ export function ItemPage({ itemId }: { itemId: string }) {
                   This item is hidden from the inbox. Restore it to reply.
                 </p>
               ) : (
-                <ReplyComposer
-                  item={query.data}
-                  focusToken={focusToken}
-                  now={query.dataUpdatedAt}
-                  rows={5}
-                  onSent={(res) => {
-                    if (res.afterSend === "next") moveOn()
-                  }}
-                />
+                <IfCan
+                  request={{ inbox: ["reply"] }}
+                  fallback={
+                    <p className="text-sm text-muted-foreground">
+                      Your access doesn’t include replying. Ask an owner or admin.
+                    </p>
+                  }
+                >
+                  <ReplyComposer
+                    item={query.data}
+                    focusToken={focusToken}
+                    now={query.dataUpdatedAt}
+                    rows={5}
+                    onSent={(res) => {
+                      if (res.afterSend === "next") moveOn()
+                    }}
+                  />
+                </IfCan>
               )}
             </div>
           </section>

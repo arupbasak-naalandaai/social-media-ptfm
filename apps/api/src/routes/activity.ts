@@ -5,7 +5,8 @@ import {
   JOB_STATES,
   auditQuerySchema,
   activityQuerySchema,
-  hasRole,
+  can,
+  type Platform,
   jobsQuerySchema,
   type AuditEntryDto,
   type JobDto,
@@ -16,7 +17,7 @@ import {
 import type { Prisma, PrismaClient } from "@inbox/db"
 import type { JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission, visiblePlatforms } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface ActivityRouteDeps {
@@ -64,7 +65,7 @@ function page<T>(rows: T[], offset: number, limit: number): Paged<T> {
 /** Activity log: audit entries, background jobs (pg-boss) and webhook deliveries. */
 export function activityRoutes({ prisma }: ActivityRouteDeps) {
   return new Hono<AppEnv>()
-    .use("*", requireAuth)
+    .use("*", requireAuth, requirePermission({ activity: ["read"] }))
 
     .get("/audit", validate("query", auditQuerySchema), async (c) => {
       const org = c.get("org")!
@@ -158,9 +159,13 @@ export function activityRoutes({ prisma }: ActivityRouteDeps) {
       const offset = q.cursor ?? 0
       // Deliveries that couldn't be matched to an organization (e.g. a bad signature) are
       // shown to admins too: in a single-workspace install they're this workspace's.
-      const where: Prisma.WebhookEventWhereInput = hasRole(org.role, "admin")
-        ? { OR: [{ organizationId: org.id }, { organizationId: null }] }
-        : { organizationId: org.id }
+      const sources = webhookSourcesFor(visiblePlatforms(org))
+      const where: Prisma.WebhookEventWhereInput = {
+        source: { in: sources },
+        ...(can(org.permissions, { activity: ["replay"] })
+          ? { OR: [{ organizationId: org.id }, { organizationId: null }] }
+          : { organizationId: org.id }),
+      }
       const rows = await prisma.webhookEvent.findMany({
         where,
         orderBy: { receivedAt: "desc" },
@@ -182,12 +187,22 @@ export function activityRoutes({ prisma }: ActivityRouteDeps) {
     })
 }
 
+/** Webhook sources whose deliveries can carry items from these platforms. */
+function webhookSourcesFor(platforms: Platform[]): string[] {
+  const has = (...p: Platform[]) => p.some((x) => platforms.includes(x))
+  return [
+    ...(has("facebook", "instagram") ? ["meta"] : []),
+    ...(has("google_business", "youtube") ? ["google"] : []),
+    ...(has("linkedin") ? ["linkedin"] : []),
+  ]
+}
+
 /** POST /api/webhooks/:id/replay: re-run a stored delivery through the ingest queue. */
 export function webhookAdminRoutes({ prisma, jobs }: ActivityRouteDeps) {
   return new Hono<AppEnv>().post(
     "/:id/replay",
     requireAuth,
-    requireRole("admin"),
+    requirePermission({ activity: ["replay"] }),
     validate("param", z.object({ id: z.string().min(1) })),
     async (c) => {
       const org = c.get("org")!
@@ -195,7 +210,9 @@ export function webhookAdminRoutes({ prisma, jobs }: ActivityRouteDeps) {
       const event = await prisma.webhookEvent.findFirst({
         where: { id, OR: [{ organizationId: org.id }, { organizationId: null }] },
       })
-      if (!event) throw new HTTPException(404, { message: "Webhook event not found" })
+      if (!event || !webhookSourcesFor(visiblePlatforms(org)).includes(event.source)) {
+        throw new HTTPException(404, { message: "Webhook event not found" })
+      }
       if (!event.signatureValid) {
         throw new HTTPException(409, {
           message: "This delivery failed signature verification, so it can't be replayed",

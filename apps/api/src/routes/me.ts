@@ -9,6 +9,8 @@ export const meRoutes = new Hono<AppEnv>().get("/", requireAuth, (c) => {
     user: { id: user.id, email: user.email, name: user.name, image: user.image ?? null },
     organization: { id: org.id, name: org.name },
     role: org.role,
+    /** Effective permissions; the UI uses them to show or hide controls (the API re-checks). */
+    permissions: org.permissions,
     preview: c.get("preview"),
   })
 })

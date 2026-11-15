@@ -38,7 +38,7 @@ import {
   settingsSecretAad,
   testAiConnection,
 } from "@inbox/pipeline"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission } from "../middleware/session"
 import { googleRedirectUri, linkedinRedirectUri } from "./oauth"
 import type { AppEnv } from "../types"
 
@@ -107,7 +107,7 @@ export function settingsRoutes({ prisma, keyring, urls }: SettingsRouteDeps) {
 
   return (
     new Hono<AppEnv>()
-      .use("*", requireAuth, requireRole("admin"))
+      .use("*", requireAuth, requirePermission({ settings: ["manage"] }))
 
       .get("/", async (c) => {
         const org = c.get("org")!

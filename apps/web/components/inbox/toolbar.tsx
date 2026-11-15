@@ -1,8 +1,16 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { Search, Tag, X } from "lucide-react"
-import { ITEM_TYPES, PLATFORMS, PRIORITIES, VIEW_STATUSES, type ItemStatus } from "@inbox/core"
+import {
+  ITEM_TYPES,
+  PLATFORMS,
+  PRIORITIES,
+  VIEW_STATUSES,
+  type ItemStatus,
+  type Platform,
+} from "@inbox/core"
+import { usePlatforms } from "@/components/app/me-context"
 import { PLATFORM_LABELS, PlatformIcon } from "@/components/app/platform-icon"
 import { STATUS_LABELS, TYPE_LABELS } from "@/components/app/item-badges"
 import { Button } from "@/components/ui/button"
@@ -41,6 +49,42 @@ const SORT_ITEMS: { value: Sort; label: string }[] = [
 
 /** Tags the default rules add; tags seen in the current results are merged in. */
 const KNOWN_TAGS = ["vip", "complaint", "low-rating", "low-value", "spam"]
+
+function PlatformSelect({
+  platforms,
+  value,
+  onChange,
+}: {
+  platforms: readonly Platform[]
+  value: string[]
+  onChange: (v: string[]) => void
+}) {
+  return (
+    <MultiSelect
+      label="Platform"
+      options={platforms.map((p) => ({
+        value: p,
+        label: PLATFORM_LABELS[p],
+        icon: <PlatformIcon platform={p} title={false} className="size-4 text-[8px]" />,
+      }))}
+      value={value}
+      onChange={onChange}
+    />
+  )
+}
+
+/** Only the platforms this member can see. Hidden when there's just one. */
+function MyPlatformSelect({
+  value,
+  onChange,
+}: {
+  value: string[]
+  onChange: (v: string[]) => void
+}) {
+  const platforms = usePlatforms()
+  if (platforms.length <= 1) return null
+  return <PlatformSelect platforms={platforms} value={value} onChange={onChange} />
+}
 
 export function Toolbar({
   view,
@@ -93,16 +137,17 @@ export function Toolbar({
           className="pl-8"
         />
       </div>
-      <MultiSelect
-        label="Platform"
-        options={PLATFORMS.map((p) => ({
-          value: p,
-          label: PLATFORM_LABELS[p],
-          icon: <PlatformIcon platform={p} title={false} className="size-4 text-[8px]" />,
-        }))}
-        value={filters.platform}
-        onChange={(v) => update({ platform: v })}
-      />
+      <Suspense
+        fallback={
+          <PlatformSelect
+            platforms={PLATFORMS}
+            value={filters.platform}
+            onChange={(v) => update({ platform: v })}
+          />
+        }
+      >
+        <MyPlatformSelect value={filters.platform} onChange={(v) => update({ platform: v })} />
+      </Suspense>
       <MultiSelect
         label="Type"
         options={ITEM_TYPES.map((t) => ({ value: t, label: TYPE_LABELS[t] }))}

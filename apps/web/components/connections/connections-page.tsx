@@ -44,7 +44,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { EmptyState } from "@/components/app/empty-state"
-import { useIsAdmin } from "@/components/app/me-context"
+import { useCan, usePlatforms } from "@/components/app/me-context"
 import { PlatformIcon, PLATFORM_LABELS } from "@/components/app/platform-icon"
 import { CopyField } from "@/components/settings/secret-field"
 import { useNow } from "@/components/settings/sync-tab"
@@ -137,17 +137,19 @@ export function ConnectionsPage() {
 }
 
 function ConnectionsGate() {
-  const isAdmin = useIsAdmin()
-  if (!isAdmin) {
+  const canView = useCan({ connection: ["read"] })
+  const canManage = useCan({ connection: ["manage"] })
+  const platforms = usePlatforms()
+  if (!canView) {
     return (
       <EmptyState
         icon={Lock}
-        title="Owners and admins only"
+        title="You don’t have access"
         description="Ask an owner or admin to connect or change platform accounts."
       />
     )
   }
-  return <ConnectionsContent />
+  return <ConnectionsContent canManage={canManage} platforms={platforms} />
 }
 
 /** Shows the result of an OAuth round trip (?connected / ?error / ?warning) once. */
@@ -179,7 +181,14 @@ function useOAuthResult() {
   }, [params, router, pathname])
 }
 
-function ConnectionsContent() {
+function ConnectionsContent({
+  canManage,
+  platforms,
+}: {
+  canManage: boolean
+  /** Platforms this member can see; providers outside them are hidden. */
+  platforms: Platform[]
+}) {
   useOAuthResult()
   const qc = useQueryClient()
   const { data, isPending, isError, error, refetch } = useQuery({
@@ -252,9 +261,11 @@ function ConnectionsContent() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
       <Overview data={data} />
-      {PROVIDERS.map((p) => {
+      {PROVIDERS.filter((p) => p.platforms.some((pl) => platforms.includes(pl))).map((p) => {
         const accounts = data.accounts.filter((a) => p.platforms.includes(a.platform))
         const configured = data.configured[p.key]
+        // Connecting brings in every platform of the provider (Meta: Facebook + Instagram).
+        const canConnect = canManage && p.platforms.every((pl) => platforms.includes(pl))
         const hasReal = accounts.some((a) => !a.demo)
         return (
           <Card key={p.key}>
@@ -271,7 +282,7 @@ function ConnectionsContent() {
               <div className="flex w-full flex-col items-start gap-1 sm:w-auto sm:items-end">
                 {p.phase ? (
                   <Badge variant="outline">Coming in phase {p.phase}</Badge>
-                ) : configured ? (
+                ) : !canConnect ? null : configured ? (
                   <Button nativeButton={false} render={<a href={p.startUrl} />}>
                     <Plug />
                     {hasReal ? "Connect more / reconnect" : "Connect"}
@@ -293,14 +304,21 @@ function ConnectionsContent() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              <SetupChecklist provider={p.key} data={data} defaultOpen={!configured || !hasReal} />
+              {canManage ? (
+                <SetupChecklist
+                  provider={p.key}
+                  data={data}
+                  defaultOpen={!configured || !hasReal}
+                />
+              ) : null}
               {accounts.length ? (
                 <ul className="divide-y rounded-lg border">
                   {accounts.map((a) => (
                     <AccountRow
                       key={a.id}
                       account={a}
-                      reconnectUrl={configured ? p.startUrl : undefined}
+                      canManage={canManage}
+                      reconnectUrl={configured && canConnect ? p.startUrl : undefined}
                       onInclude={(included) => patch.mutate({ id: a.id, included })}
                       onTest={() => test.mutate(a.id)}
                       testing={test.isPending && test.variables === a.id}
@@ -398,7 +416,7 @@ function Overview({ data }: { data: ConnectionsResponse }) {
             {problems.slice(0, 6).map((p) => (
               <li key={p} className="flex gap-1.5">
                 <CircleAlert className="mt-0.5 size-3 shrink-0" />
-                <span className="min-w-0 break-words">{p}</span>
+                <span className="min-w-0 wrap-break-word">{p}</span>
               </li>
             ))}
             {problems.length > 6 ? <li>…and {problems.length - 6} more below</li> : null}
@@ -728,11 +746,13 @@ function SetupChecklist({
 function StreamLine({
   stream: s,
   included,
+  canRun,
   onRun,
   running,
 }: {
   stream: ConnectionStreamDto
   included: boolean
+  canRun: boolean
   onRun: () => void
   running: boolean
 }) {
@@ -775,7 +795,7 @@ function StreamLine({
         )}
         {s.key === "yt_comments" && s.quotaUsedToday ? ` · ${s.quotaUsedToday} units today` : ""}
       </span>
-      {included ? (
+      {included && canRun ? (
         <Button
           size="xs"
           variant="ghost"
@@ -799,6 +819,7 @@ function StreamLine({
 
 function AccountRow({
   account: a,
+  canManage,
   reconnectUrl,
   onInclude,
   onTest,
@@ -808,6 +829,7 @@ function AccountRow({
   onDisconnect,
 }: {
   account: ConnectionDto
+  canManage: boolean
   reconnectUrl: string | undefined
   onInclude: (included: boolean) => void
   onTest: () => void
@@ -868,6 +890,7 @@ function AccountRow({
           <Switch
             id={switchId}
             checked={a.included}
+            disabled={!canManage}
             onCheckedChange={onInclude}
             aria-label={`Sync ${a.displayName}`}
           />
@@ -875,7 +898,7 @@ function AccountRow({
             Sync
           </label>
         </div>
-        {!a.demo ? (
+        {!a.demo && canManage ? (
           <div className="flex items-center gap-1">
             {a.status === "error" || a.status === "disconnected" ? (
               reconnectUrl ? (
@@ -916,6 +939,7 @@ function AccountRow({
               key={s.syncStateId}
               stream={s}
               included={a.included}
+              canRun={canManage}
               onRun={() => onRun(s.syncStateId)}
               running={running === s.syncStateId}
             />

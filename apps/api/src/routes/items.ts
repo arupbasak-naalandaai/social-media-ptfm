@@ -23,7 +23,9 @@ import {
   type ItemListResponse,
   type ItemStatus,
   type ItemSummary,
+  type Platform,
   type ThreadEntry,
+  can,
 } from "@inbox/core"
 import { Prisma, type PrismaClient } from "@inbox/db"
 import {
@@ -39,8 +41,8 @@ import {
 } from "@inbox/pipeline"
 import type { JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
-import { requireAuth, requireRole } from "../middleware/session"
-import type { AppEnv } from "../types"
+import { requireAuth, requirePermission, visiblePlatforms } from "../middleware/session"
+import type { AppEnv, OrgContext } from "../types"
 
 export interface ItemRouteDeps {
   prisma: PrismaClient
@@ -99,15 +101,29 @@ export function toSummary(row: SummaryRow): ItemSummary {
 
 const idParam = z.object({ id: z.string().min(1).max(64) })
 
+/** Items the member may see: their organization, on the platforms they have access to. */
+function scope(org: OrgContext): Prisma.ItemWhereInput {
+  return { organizationId: org.id, platform: { in: visiblePlatforms(org) } }
+}
+
+const canReply = requirePermission({ inbox: ["reply"] })
+const canTriage = requirePermission({ inbox: ["triage"] })
+const canUseAi = requirePermission({ ai: ["draft"] })
+
 /** Filters shared by the item list and the follow-ups list (everything except status). */
-function commonWhere(q: {
-  platform?: ItemSummary["platform"][] | undefined
-  type?: ItemSummary["type"][] | undefined
-  since: keyof typeof SINCE_MS | "all"
-  q?: string | undefined
-}): Prisma.ItemWhereInput {
+function commonWhere(
+  org: OrgContext,
+  q: {
+    platform?: ItemSummary["platform"][] | undefined
+    type?: ItemSummary["type"][] | undefined
+    since: keyof typeof SINCE_MS | "all"
+    q?: string | undefined
+  },
+): Prisma.ItemWhereInput {
+  const allowed: Platform[] = visiblePlatforms(org)
   return {
-    ...(q.platform ? { platform: { in: q.platform } } : {}),
+    ...scope(org),
+    platform: { in: q.platform ? q.platform.filter((p) => allowed.includes(p)) : allowed },
     ...(q.type ? { type: { in: q.type } } : {}),
     ...(q.since !== "all" ? { receivedAt: { gte: new Date(Date.now() - SINCE_MS[q.since]) } } : {}),
     ...(q.q
@@ -131,32 +147,37 @@ function viewWhere(view: InboxView, statuses: readonly ItemStatus[]): Prisma.Ite
 }
 
 export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
-  async function findOwned(organizationId: string, id: string) {
-    const item = await prisma.item.findFirst({ where: { id, organizationId } })
+  async function findOwned(org: OrgContext, id: string) {
+    const item = await prisma.item.findFirst({ where: { id, ...scope(org) } })
     if (!item) throw new HTTPException(404, { message: "Item not found" })
     return item
   }
 
   async function setStatus(
-    organizationId: string,
+    org: OrgContext,
     id: string,
     data: Prisma.ItemUpdateInput,
     reason: string,
   ) {
-    await findOwned(organizationId, id)
+    await findOwned(org, id)
     const updated = await prisma.item.update({ where: { id }, data, select: summarySelect })
-    await notifyInbox(prisma, { type: "items.changed", organizationId, itemIds: [id], reason })
+    await notifyInbox(prisma, {
+      type: "items.changed",
+      organizationId: org.id,
+      itemIds: [id],
+      reason,
+    })
     return toSummary(updated)
   }
 
-  async function countViews(organizationId: string): Promise<ItemCounts> {
+  async function countViews(org: OrgContext): Promise<ItemCounts> {
     const views = Object.keys(VIEW_STATUSES) as InboxView[]
     const [followUps, ...counts] = await Promise.all([
       prisma.item.count({
-        where: { organizationId, isFollowUp: true, status: { in: [...OPEN_STATUSES] } },
+        where: { ...scope(org), isFollowUp: true, status: { in: [...OPEN_STATUSES] } },
       }),
       ...views.map((view) =>
-        prisma.item.count({ where: { organizationId, ...viewWhere(view, VIEW_STATUSES[view]) } }),
+        prisma.item.count({ where: { ...scope(org), ...viewWhere(view, VIEW_STATUSES[view]) } }),
       ),
     ])
     return {
@@ -170,16 +191,15 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
 
   return (
     new Hono<AppEnv>()
-      .use("*", requireAuth)
+      .use("*", requireAuth, requirePermission({ inbox: ["read"] }))
 
       .get("/", validate("query", itemListQuerySchema), async (c) => {
         const org = c.get("org")!
         const q = c.req.valid("query")
         const statuses: readonly ItemStatus[] = q.status?.length ? q.status : VIEW_STATUSES[q.view]
         const where: Prisma.ItemWhereInput = {
-          organizationId: org.id,
           ...viewWhere(q.view, statuses),
-          ...commonWhere(q),
+          ...commonWhere(org, q),
           ...(q.priority ? { priority: { in: q.priority } } : {}),
           ...(q.tag ? { tags: { has: q.tag } } : {}),
         }
@@ -198,7 +218,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
             take: q.limit + 1,
             select: summarySelect,
           }),
-          countViews(org.id),
+          countViews(org),
         ])
         const hasMore = rows.length > q.limit
         const body: ItemListResponse = {
@@ -217,7 +237,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
         const org = c.get("org")!
         const q = c.req.valid("query")
         const offset = q.cursor ? Math.max(0, Number.parseInt(q.cursor, 10) || 0) : 0
-        const filters = commonWhere(q)
+        const filters = commonWhere(org, q)
         const threadKeyNotNull = { threadKey: { not: null } } satisfies Prisma.ItemWhereInput
         const byActivity = [
           { _max: { receivedAt: "desc" } },
@@ -262,7 +282,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           keys.length
             ? prisma.item.findMany({
                 where: {
-                  organizationId: org.id,
+                  ...scope(org),
                   threadKey: { in: keys },
                   status: { notIn: [...HIDDEN_STATUSES] },
                 },
@@ -270,7 +290,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
                 select: { ...summarySelect, threadKey: true, resolvedAt: true },
               })
             : Promise.resolve([]),
-          countViews(org.id),
+          countViews(org),
         ])
 
         const byThread = new Map<string, typeof items>()
@@ -316,7 +336,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
         const org = c.get("org")!
         const { id } = c.req.valid("param")
         const row = await prisma.item.findFirst({
-          where: { id, organizationId: org.id },
+          where: { id, ...scope(org) },
           select: {
             ...summarySelect,
             threadKey: true,
@@ -428,6 +448,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           requireApproval,
           ...summaryFields
         } = row
+        const aiAllowed = can(org.permissions, { ai: ["draft"] })
         const detail: ItemDetail = {
           ...toSummary({ ...summaryFields, platformAccount }),
           externalId: row.externalId,
@@ -456,15 +477,22 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
                 expired: expiresAt ? expiresAt.getTime() < Date.now() : false,
               }
             : null,
-          aiDrafts: aiDrafts.map((d) => ({ ...d, createdAt: d.createdAt.toISOString() })),
+          aiDrafts: aiAllowed
+            ? aiDrafts.map((d) => ({ ...d, createdAt: d.createdAt.toISOString() }))
+            : [],
           replies: replies.map((r) => ({ ...r, sentAt: r.sentAt?.toISOString() ?? null })),
           canReply: canSendFrom(platformAccount),
           demoAccount: isDemoAccount(platformAccount),
-          ai: { available: aiBlocked === null, message: aiBlocked?.message ?? null },
+          ai: {
+            allowed: aiAllowed,
+            available: aiAllowed && aiBlocked === null,
+            message: aiAllowed ? (aiBlocked?.message ?? null) : null,
+          },
         }
 
         // Settings → AI replies → "When someone opens the item": draft now (deduplicated).
         if (
+          aiAllowed &&
           aiBlocked === null &&
           aiDrafts.length === 0 &&
           aiDraftsAllowed &&
@@ -484,12 +512,17 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
       // Queue a reply; it posts after Settings → Replies → undo window unless cancelled.
       .post(
         "/:id/reply",
+        canReply,
         validate("param", idParam),
         validate("json", replyRequestSchema),
         async (c) => {
           const org = c.get("org")!
           const { id } = c.req.valid("param")
           const body = c.req.valid("json")
+          await findOwned(org, id)
+          if (body.draftId && !can(org.permissions, { ai: ["draft"] })) {
+            throw new HTTPException(403, { message: "Your access doesn't include AI drafts" })
+          }
           let queued
           try {
             queued = await queueReply(prisma, {
@@ -529,10 +562,17 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
       // Undo within the window. 409 once it has started sending.
       .post(
         "/:id/replies/:replyId/cancel",
+        canReply,
         validate("param", z.object({ id: z.string().min(1), replyId: z.string().min(1) })),
         async (c) => {
           const org = c.get("org")!
           const { id, replyId } = c.req.valid("param")
+          await findOwned(org, id)
+          const owned = await prisma.reply.findFirst({
+            where: { id: replyId, itemId: id, organizationId: org.id },
+            select: { id: true },
+          })
+          if (!owned) throw new HTTPException(404, { message: "Reply not found" })
           const text = await cancelReply(prisma, org.id, replyId)
           if (text === null) {
             throw new HTTPException(409, { message: "Too late: the reply is already sending" })
@@ -548,11 +588,11 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
       )
 
       // Draft (again) with AI. Replaces drafts nobody picked; 409 when AI isn't set up.
-      .post("/:id/drafts", validate("param", idParam), async (c) => {
+      .post("/:id/drafts", canReply, canUseAi, validate("param", idParam), async (c) => {
         const org = c.get("org")!
         const { id } = c.req.valid("param")
         const item = await prisma.item.findFirst({
-          where: { id, organizationId: org.id },
+          where: { id, ...scope(org) },
           select: { id: true, aiDraftsAllowed: true, isOwnAccount: true },
         })
         if (!item) throw new HTTPException(404, { message: "Item not found" })
@@ -574,12 +614,12 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
         return c.json({ queued: true }, 202)
       })
 
-      .post("/:id/resolve", validate("param", idParam), async (c) => {
+      .post("/:id/resolve", canTriage, validate("param", idParam), async (c) => {
         const org = c.get("org")!
         const user = c.get("user")!
         const { id } = c.req.valid("param")
         const item = await setStatus(
-          org.id,
+          org,
           id,
           {
             status: "resolved",
@@ -606,20 +646,20 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
         return c.json(item)
       })
 
-      .post("/:id/ignore", validate("param", idParam), async (c) => {
+      .post("/:id/ignore", canTriage, validate("param", idParam), async (c) => {
         const org = c.get("org")!
         const { id } = c.req.valid("param")
         return c.json(
-          await setStatus(org.id, id, { status: "ignored", manualOverride: true }, "ignored"),
+          await setStatus(org, id, { status: "ignored", manualOverride: true }, "ignored"),
         )
       })
 
-      .post("/:id/reopen", validate("param", idParam), async (c) => {
+      .post("/:id/reopen", canTriage, validate("param", idParam), async (c) => {
         const org = c.get("org")!
         const { id } = c.req.valid("param")
         return c.json(
           await setStatus(
-            org.id,
+            org,
             id,
             { status: "new", resolvedAt: null, resolvedById: null, manualOverride: true },
             "reopened",
@@ -627,12 +667,12 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
         )
       })
 
-      .post("/:id/archive", validate("param", idParam), async (c) => {
+      .post("/:id/archive", canTriage, validate("param", idParam), async (c) => {
         const org = c.get("org")!
         const { id } = c.req.valid("param")
         return c.json(
           await setStatus(
-            org.id,
+            org,
             id,
             { status: "archived", filterReason: "Archived by a teammate", manualOverride: true },
             "archived",
@@ -644,75 +684,82 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
        * "Hide similar": learns a low-value phrase from this item's text, adds it to the
        * Low-value phrases list, archives the item, and re-filters so look-alikes leave the inbox.
        */
-      .post("/:id/hide-similar", requireRole("admin"), validate("param", idParam), async (c) => {
-        const org = c.get("org")!
-        const user = c.get("user")!
-        const { id } = c.req.valid("param")
-        const before = await findOwned(org.id, id)
-        const learned = learnLowValuePhrase(before.text)
-        if (!learned.ok) {
-          throw new HTTPException(400, { message: LEARN_PHRASE_ERRORS[learned.reason] })
-        }
-        const { phrase } = learned
-        const listed = { organizationId: org.id, list: "low_value_phrases", kind: "keyword" }
-
-        let entryId: string | null = null
-        const existing = await prisma.listEntry.findFirst({
-          where: { ...listed, value: phrase, platform: null },
-          select: { id: true },
-        })
-        if (!existing) {
-          try {
-            const entry = await prisma.listEntry.create({
-              data: {
-                ...listed,
-                value: phrase,
-                platform: null,
-                note: `Learned from “${(before.text ?? "").slice(0, 80)}”`,
-                createdById: user.id,
-              },
-            })
-            entryId = entry.id
-          } catch (err) {
-            // A concurrent "Hide similar" added the same phrase: fine.
-            if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"))
-              throw err
+      .post(
+        "/:id/hide-similar",
+        canTriage,
+        requirePermission({ filter: ["manage"] }),
+        validate("param", idParam),
+        async (c) => {
+          const org = c.get("org")!
+          const user = c.get("user")!
+          const { id } = c.req.valid("param")
+          const before = await findOwned(org, id)
+          const learned = learnLowValuePhrase(before.text)
+          if (!learned.ok) {
+            throw new HTTPException(400, { message: LEARN_PHRASE_ERRORS[learned.reason] })
           }
-        }
+          const { phrase } = learned
+          const listed = { organizationId: org.id, list: "low_value_phrases", kind: "keyword" }
 
-        const item = await setStatus(
-          org.id,
-          id,
-          {
-            status: "archived",
-            filterReason: `Hidden as low-value (“${phrase}”)`,
-            manualOverride: true,
-            tags: before.tags.includes("low-value") ? before.tags : [...before.tags, "low-value"],
-          },
-          "hidden-similar",
-        )
-        await prisma.auditLog.create({
-          data: {
-            organizationId: org.id,
-            actorId: user.id,
-            action: "item.hide_similar",
-            entity: "item",
-            entityId: id,
-            before: { status: before.status },
-            after: { status: "archived", phrase, listEntryId: entryId },
-          },
-        })
-        if (entryId) {
-          await notifyInbox(prisma, { type: "lists.changed", organizationId: org.id })
-          await jobs.enqueueRefilter(org.id, c.get("requestId"))
-        }
-        const body: HideSimilarResponse = { item, phrase, entryId }
-        return c.json(body)
-      })
+          let entryId: string | null = null
+          const existing = await prisma.listEntry.findFirst({
+            where: { ...listed, value: phrase, platform: null },
+            select: { id: true },
+          })
+          if (!existing) {
+            try {
+              const entry = await prisma.listEntry.create({
+                data: {
+                  ...listed,
+                  value: phrase,
+                  platform: null,
+                  note: `Learned from “${(before.text ?? "").slice(0, 80)}”`,
+                  createdById: user.id,
+                },
+              })
+              entryId = entry.id
+            } catch (err) {
+              // A concurrent "Hide similar" added the same phrase: fine.
+              if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"))
+                throw err
+            }
+          }
+
+          const item = await setStatus(
+            org,
+            id,
+            {
+              status: "archived",
+              filterReason: `Hidden as low-value (“${phrase}”)`,
+              manualOverride: true,
+              tags: before.tags.includes("low-value") ? before.tags : [...before.tags, "low-value"],
+            },
+            "hidden-similar",
+          )
+          await prisma.auditLog.create({
+            data: {
+              organizationId: org.id,
+              actorId: user.id,
+              action: "item.hide_similar",
+              entity: "item",
+              entityId: id,
+              before: { status: before.status },
+              after: { status: "archived", phrase, listEntryId: entryId },
+            },
+          })
+          if (entryId) {
+            await notifyInbox(prisma, { type: "lists.changed", organizationId: org.id })
+            await jobs.enqueueRefilter(org.id, c.get("requestId"))
+          }
+          const body: HideSimilarResponse = { item, phrase, entryId }
+          return c.json(body)
+        },
+      )
 
       /** "Not spam / restore": back to the inbox, optionally allowlisting the author. */
       .post(
         "/:id/restore",
+        canTriage,
         validate("param", idParam),
         validate("json", restoreItemSchema),
         async (c) => {
@@ -720,7 +767,10 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           const user = c.get("user")!
           const { id } = c.req.valid("param")
           const { addToAllowlist } = c.req.valid("json")
-          const before = await findOwned(org.id, id)
+          if (addToAllowlist && !can(org.permissions, { filter: ["manage"] })) {
+            throw new HTTPException(403, { message: "Adding to the allowlist needs filter access" })
+          }
+          const before = await findOwned(org, id)
 
           let allowlisted: { kind: string; value: string } | null = null
           if (addToAllowlist) {
@@ -756,7 +806,7 @@ export function itemRoutes({ prisma, jobs }: ItemRouteDeps) {
           }
 
           const item = await setStatus(
-            org.id,
+            org,
             id,
             { status: "new", filterReason: null, manualOverride: true },
             "restored",

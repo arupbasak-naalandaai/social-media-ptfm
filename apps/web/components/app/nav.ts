@@ -6,8 +6,10 @@ import {
   ListFilter,
   Plug,
   Settings,
+  Users,
   type LucideIcon,
 } from "lucide-react"
+import type { PermissionMap } from "@inbox/core"
 
 export interface NavItem {
   title: string
@@ -16,7 +18,8 @@ export interface NavItem {
   /** Phase that builds this page (shown in the empty state). */
   phase: number
   description: string
-  adminOnly?: boolean
+  /** Shown only to members with these permissions (the api enforces them too). */
+  permission?: PermissionMap
 }
 
 export const NAV_MAIN: NavItem[] = [
@@ -26,6 +29,7 @@ export const NAV_MAIN: NavItem[] = [
     icon: Inbox,
     phase: 2,
     description: "Every review, comment and DM that needs a reply.",
+    permission: { inbox: ["read"] },
   },
   {
     title: "Filtered",
@@ -33,6 +37,7 @@ export const NAV_MAIN: NavItem[] = [
     icon: ListFilter,
     phase: 2,
     description: "Items your filter rules archived, with one-click restore.",
+    permission: { inbox: ["read"] },
   },
   {
     title: "Analytics",
@@ -50,7 +55,7 @@ export const NAV_MANAGE: NavItem[] = [
     icon: Filter,
     phase: 2,
     description: "Rules that decide what the team never needs to see.",
-    adminOnly: true,
+    permission: { filter: ["manage"] },
   },
   {
     title: "Connections",
@@ -58,7 +63,7 @@ export const NAV_MANAGE: NavItem[] = [
     icon: Plug,
     phase: 4,
     description: "Connect Google Business, Facebook, Instagram, YouTube and LinkedIn.",
-    adminOnly: true,
+    permission: { connection: ["read"] },
   },
   {
     title: "Activity log",
@@ -66,6 +71,15 @@ export const NAV_MANAGE: NavItem[] = [
     icon: Activity,
     phase: 3,
     description: "Webhook events, job failures and the audit log.",
+    permission: { activity: ["read"] },
+  },
+  {
+    title: "Members",
+    href: "/members",
+    icon: Users,
+    phase: 11,
+    description: "Who can sign in, their role, and which platforms and controls they can use.",
+    permission: { member: ["update"] },
   },
   {
     title: "Settings",
@@ -73,7 +87,7 @@ export const NAV_MANAGE: NavItem[] = [
     icon: Settings,
     phase: 3,
     description: "Workspace, sync, AI replies, notifications and data.",
-    adminOnly: true,
+    permission: { settings: ["manage"] },
   },
 ]
 

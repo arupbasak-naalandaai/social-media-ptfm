@@ -2,6 +2,7 @@
  * Meta webhooks + connect flow and the YouTube connect flow, against a real database
  * (TEST_DATABASE_URL). Graph / Google endpoints are stubbed (fetch).
  */
+import { effectivePermissions } from "@inbox/core"
 import { createHmac, randomBytes } from "node:crypto"
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ConnectionsResponse, IngestJobData } from "@inbox/core"
@@ -42,7 +43,14 @@ const app = () =>
         session: { id: "s-m", activeOrganizationId: ORG },
       }),
     },
-    orgs: { resolve: async () => ({ id: ORG, name: "M", role: "owner" }) },
+    orgs: {
+      resolve: async () => ({
+        id: ORG,
+        name: "M",
+        role: "owner",
+        permissions: effectivePermissions("owner", null),
+      }),
+    },
     logger,
     checkDb: async () => true,
     prisma: prisma!,

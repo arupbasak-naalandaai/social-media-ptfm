@@ -24,7 +24,7 @@ import type { FilterRule as FilterRuleRow, Prisma, PrismaClient } from "@inbox/d
 import { itemToFilterInput, loadFilterSetup, notifyInbox, ruleFromRow } from "@inbox/pipeline"
 import { autoRefilterEnabled, type JobSender } from "../lib/jobs"
 import { validate } from "../lib/validate"
-import { requireAuth, requireRole } from "../middleware/session"
+import { requireAuth, requirePermission } from "../middleware/session"
 import type { AppEnv } from "../types"
 
 export interface FilterRouteDeps {
@@ -115,7 +115,7 @@ export function filterRoutes({ prisma, jobs }: FilterRouteDeps) {
 
   return (
     new Hono<AppEnv>()
-      .use("*", requireAuth)
+      .use("*", requireAuth, requirePermission({ filter: ["read"] }))
 
       .get("/", async (c) => {
         const org = c.get("org")!
@@ -237,39 +237,44 @@ export function filterRoutes({ prisma, jobs }: FilterRouteDeps) {
       })
 
       // ── Admin-only writes ──────────────────────────────────────────────────
-      .post("/", requireRole("admin"), validate("json", filterRuleInputSchema), async (c) => {
-        const org = c.get("org")!
-        const rule = c.req.valid("json")
-        assertValidTree(rule)
-        const last = await prisma.filterRule.findFirst({
-          where: { organizationId: org.id },
-          orderBy: { priority: "desc" },
-          select: { priority: true },
-        })
-        const row = await prisma.filterRule.create({
-          data: {
-            organizationId: org.id,
-            ...toJson(rule),
-            priority: rule.priority ?? (last?.priority ?? 0) + PRIORITY_STEP,
-            createdById: c.get("user")!.id,
-            updatedById: c.get("user")!.id,
-          },
-        })
-        await afterChange(
-          org.id,
-          c.get("user")!.id,
-          c.get("requestId"),
-          "filter_rule.create",
-          row.id,
-          null,
-          snapshot(row),
-        )
-        return c.json({ id: row.id }, 201)
-      })
+      .post(
+        "/",
+        requirePermission({ filter: ["manage"] }),
+        validate("json", filterRuleInputSchema),
+        async (c) => {
+          const org = c.get("org")!
+          const rule = c.req.valid("json")
+          assertValidTree(rule)
+          const last = await prisma.filterRule.findFirst({
+            where: { organizationId: org.id },
+            orderBy: { priority: "desc" },
+            select: { priority: true },
+          })
+          const row = await prisma.filterRule.create({
+            data: {
+              organizationId: org.id,
+              ...toJson(rule),
+              priority: rule.priority ?? (last?.priority ?? 0) + PRIORITY_STEP,
+              createdById: c.get("user")!.id,
+              updatedById: c.get("user")!.id,
+            },
+          })
+          await afterChange(
+            org.id,
+            c.get("user")!.id,
+            c.get("requestId"),
+            "filter_rule.create",
+            row.id,
+            null,
+            snapshot(row),
+          )
+          return c.json({ id: row.id }, 201)
+        },
+      )
 
       .put(
         "/:id",
-        requireRole("admin"),
+        requirePermission({ filter: ["manage"] }),
         validate("param", idParam),
         validate("json", filterRuleInputSchema),
         async (c) => {
@@ -301,7 +306,7 @@ export function filterRoutes({ prisma, jobs }: FilterRouteDeps) {
 
       .patch(
         "/:id",
-        requireRole("admin"),
+        requirePermission({ filter: ["manage"] }),
         validate("param", idParam),
         validate("json", ruleTogglePatchSchema),
         async (c) => {
@@ -326,57 +331,67 @@ export function filterRoutes({ prisma, jobs }: FilterRouteDeps) {
         },
       )
 
-      .delete("/:id", requireRole("admin"), validate("param", idParam), async (c) => {
-        const org = c.get("org")!
-        const { id } = c.req.valid("param")
-        const before = await findOwned(org.id, id)
-        await prisma.filterRule.delete({ where: { id } })
-        await afterChange(
-          org.id,
-          c.get("user")!.id,
-          c.get("requestId"),
-          "filter_rule.delete",
-          id,
-          snapshot(before),
-          null,
-        )
-        return c.body(null, 204)
-      })
+      .delete(
+        "/:id",
+        requirePermission({ filter: ["manage"] }),
+        validate("param", idParam),
+        async (c) => {
+          const org = c.get("org")!
+          const { id } = c.req.valid("param")
+          const before = await findOwned(org.id, id)
+          await prisma.filterRule.delete({ where: { id } })
+          await afterChange(
+            org.id,
+            c.get("user")!.id,
+            c.get("requestId"),
+            "filter_rule.delete",
+            id,
+            snapshot(before),
+            null,
+          )
+          return c.body(null, 204)
+        },
+      )
 
-      .post("/reorder", requireRole("admin"), validate("json", reorderRulesSchema), async (c) => {
-        const org = c.get("org")!
-        const { ids } = c.req.valid("json")
-        const owned = await prisma.filterRule.findMany({
-          where: { organizationId: org.id },
-          select: { id: true, priority: true },
-          orderBy: { priority: "asc" },
-        })
-        const ownedIds = new Set(owned.map((r) => r.id))
-        if (ids.length !== owned.length || !ids.every((id) => ownedIds.has(id))) {
-          throw new HTTPException(400, { message: "ids must list every rule exactly once" })
-        }
-        await prisma.$transaction(
-          ids.map((id, index) =>
-            prisma.filterRule.update({
-              where: { id },
-              data: { priority: (index + 1) * PRIORITY_STEP },
-            }),
-          ),
-        )
-        await afterChange(
-          org.id,
-          c.get("user")!.id,
-          c.get("requestId"),
-          "filter_rule.reorder",
-          "*",
-          { order: owned.map((r) => r.id) },
-          { order: ids },
-        )
-        return c.json({ ok: true })
-      })
+      .post(
+        "/reorder",
+        requirePermission({ filter: ["manage"] }),
+        validate("json", reorderRulesSchema),
+        async (c) => {
+          const org = c.get("org")!
+          const { ids } = c.req.valid("json")
+          const owned = await prisma.filterRule.findMany({
+            where: { organizationId: org.id },
+            select: { id: true, priority: true },
+            orderBy: { priority: "asc" },
+          })
+          const ownedIds = new Set(owned.map((r) => r.id))
+          if (ids.length !== owned.length || !ids.every((id) => ownedIds.has(id))) {
+            throw new HTTPException(400, { message: "ids must list every rule exactly once" })
+          }
+          await prisma.$transaction(
+            ids.map((id, index) =>
+              prisma.filterRule.update({
+                where: { id },
+                data: { priority: (index + 1) * PRIORITY_STEP },
+              }),
+            ),
+          )
+          await afterChange(
+            org.id,
+            c.get("user")!.id,
+            c.get("requestId"),
+            "filter_rule.reorder",
+            "*",
+            { order: owned.map((r) => r.id) },
+            { order: ids },
+          )
+          return c.json({ ok: true })
+        },
+      )
 
       /** Manually re-run all rules over stored items. */
-      .post("/apply", requireRole("admin"), async (c) => {
+      .post("/apply", requirePermission({ filter: ["manage"] }), async (c) => {
         const org = c.get("org")!
         await jobs.enqueueRefilter(org.id, c.get("requestId"))
         return c.json({ queued: true }, 202)

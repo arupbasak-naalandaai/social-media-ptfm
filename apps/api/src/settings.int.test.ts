@@ -2,6 +2,7 @@
  * Settings, sync controls and the Activity log against a real database (TEST_DATABASE_URL).
  * The Phase 3 acceptance check lives here: changing an interval moves `nextRunAt` at once.
  */
+import { effectivePermissions } from "@inbox/core"
 import { randomBytes } from "node:crypto"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import type {
@@ -49,7 +50,14 @@ function app(role: Role = "owner") {
         session: { id: "s-settings", activeOrganizationId: ORG },
       }),
     },
-    orgs: { resolve: async () => ({ id: ORG, name: "Settings Org", role }) },
+    orgs: {
+      resolve: async () => ({
+        id: ORG,
+        name: "Settings Org",
+        role,
+        permissions: effectivePermissions(role, null),
+      }),
+    },
     logger,
     checkDb: async () => true,
     prisma: prisma!,
